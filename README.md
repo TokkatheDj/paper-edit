@@ -60,3 +60,7 @@ Then Phase 2 (silence removal, Studio Sound) and Phase 3 (animated captions). No
 `FINDINGS.md`: Whisper only transcribes 7-17% of filler words, so "remove the ums" has to be
 built on silence and acoustic detection rather than the transcript. Worth setting that
 expectation with her early.
+
+## License
+
+MIT — see `LICENSE`. Use it, change it, ship it.
