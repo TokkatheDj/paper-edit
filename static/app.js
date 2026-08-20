@@ -162,7 +162,9 @@ async function openProject(pid) {
   $('#silBody').classList.toggle('hide', !fresh.silence_on);
   $('#sSil').textContent = '0:00';
   $('#soundPreset').value = fresh.sound_preset || 'auto';
+  $('#capStyle').value = fresh.caption_style || 'off';
   pushSound();
+  pushCaptions();
   $('#player').src = '/api/projects/' + pid + '/proxy';
   state.words = await api(`/projects/${pid}/words`);
   renderTranscript();
@@ -409,3 +411,18 @@ async function pushSound() {
 }
 
 $('#soundPreset').onchange = pushSound;
+
+/* --------------------------------------------------------------- captions
+
+   Burned in at export. Timings are generated against the EDITED timeline, so
+   they stay in step no matter how much has been cut. */
+
+async function pushCaptions() {
+  const r = await jpost(`/projects/${state.pid}/captions`,
+                        {style: $('#capStyle').value});
+  $('#capInfo').textContent = r.style === 'off'
+    ? 'Burned in at export, with the spoken word highlighted.'
+    : `${r.words} words will be captioned, in step with your edit.`;
+}
+
+$('#capStyle').onchange = pushCaptions;

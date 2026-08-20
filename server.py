@@ -23,7 +23,9 @@ sys.path.insert(0, str(ROOT))
 from paperedit import store
 from paperedit.audio import detect_silences, silence_gaps, snap_points
 from paperedit.edl import Word, derive_cuts
+from paperedit.captions import PRESETS as CAPTION_PRESETS, words_on_output_timeline, write_ass
 from paperedit.enhance import PRESETS as SOUND_PRESETS, build_chain, recommend_preset
+from paperedit.render import escape_filter_path
 from paperedit.render import make_proxy, media_info, render
 
 PORT = 8100
@@ -98,6 +100,27 @@ def _sound_chain(p: dict) -> tuple[str, str]:
     return choice, build_chain(choice)
 
 
+def _caption_filter(pid: str, p: dict, plan) -> str:
+    """Write the .ass for this edit and return the filter that burns it in.
+
+    Regenerated per export, deliberately: the caption timings depend on the cut
+    list, so a stale file would drift out of sync the moment anything is edited.
+    """
+    style = p["caption_style"] or "off"
+    if style == "off" or style not in CAPTION_PRESETS or not p["has_video"]:
+        return ""
+    words = words_on_output_timeline(store.get_words(pid), plan)
+    if not words:
+        return ""
+    path = store.project_dir(pid) / "captions.ass"
+    write_ass(words, path, width=p["width"] or 1920, height=p["height"] or 1080,
+              style=style)
+    # A BARE filename, with ffmpeg run from the project directory. Escaping the
+    # drive colon inside a filter argument does not survive ffmpeg's option
+    # splitting on Windows; removing the colon entirely does.
+    return "subtitles=" + path.name
+
+
 def _ingest(pid: str, jid: str) -> None:
     """Probe -> proxy -> transcribe. The one long job in the app."""
     try:
@@ -148,11 +171,13 @@ def _export(pid: str, jid: str, preset: str) -> None:
         out = store.project_dir(pid) / f"export-{preset}-{int(time.time())}.{ext}"
         store.update_job(jid, progress=0.15,
                          message=f"rendering {len(plan.cuts)} cuts, {plan.duration/60:.1f} min")
+        vfilter = _caption_filter(pid, p, plan)
         used, chain = _sound_chain(p)
         if chain:
             store.update_job(jid, message=f"rendering with Studio Sound ({used})")
         render(p["source"], plan, out, extra=PRESETS[preset]["args"],
-               audio_filters=chain)
+               audio_filters=chain, video_filters=vfilter,
+               cwd=store.project_dir(pid) if vfilter else None)
         # Report the real duration, not the arithmetic one: ffmpeg's video trim
         # includes the partial frame at each boundary, so the file runs ~0.15%
         # long. Measured in spikes/drift.py -- audio and video stay in sync.
@@ -307,6 +332,20 @@ def api_sound(pid: str, body: dict = Body(...)):
             snr = 0
     return {"preset": choice, "using": used, "snr": snr,
             "reason": why, "chain": chain}
+
+
+@app.post("/api/projects/{pid}/captions")
+def api_captions(pid: str, body: dict = Body(...)):
+    """Pick a caption style, or 'off'. Burned in at export."""
+    _project_or_404(pid)
+    style = str(body.get("style", "off"))
+    if style != "off" and style not in CAPTION_PRESETS:
+        raise HTTPException(400, "unknown caption style " + style)
+    store.update_project(pid, caption_style=style)
+    plan = _plan(pid)
+    words = words_on_output_timeline(store.get_words(pid), plan)
+    return {"style": style, "words": len(words),
+            "styles": sorted(CAPTION_PRESETS)}
 
 
 @app.get("/api/projects/{pid}/plan")

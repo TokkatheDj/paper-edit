@@ -163,6 +163,21 @@ kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
         </div>
         <div class="card">
           <div class="row">
+            <b style="flex:1">Captions</b>
+            <select id="capStyle" style="min-width:130px">
+              <option value="off">Off</option>
+              <option value="clean">Clean</option>
+              <option value="highlight">Highlight</option>
+              <option value="bold">Bold</option>
+              <option value="subtle">Subtle</option>
+            </select>
+          </div>
+          <div class="small dim" id="capInfo" style="margin-top:8px">
+            Burned in at export, with the spoken word highlighted.
+          </div>
+        </div>
+        <div class="card">
+          <div class="row">
             <b style="flex:1">Studio Sound</b>
             <select id="soundPreset" style="min-width:130px">
               <option value="auto">Auto</option>

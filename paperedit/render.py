@@ -18,6 +18,8 @@ from pathlib import Path
 
 from .edl import EditPlan
 
+BS = chr(92)
+SEP_CHAIN = chr(59) + chr(10)   # ";" newline -- ffmpeg filterchain separator
 AUDIO_XFADE = 0.02  # 20 ms; hides the sample discontinuity at a join
 
 
@@ -56,8 +58,19 @@ def has_nvenc() -> bool:
         return False
 
 
+def escape_filter_path(path: str | Path) -> str:
+    r"""Make a Windows path safe inside an ffmpeg filter argument.
+
+    NOTE: escaping a drive letter here is unreliable -- ffmpeg still split
+    'D\:/dir/x.ass' on the colon and tried to read the tail as another option.
+    Prefer running ffmpeg with cwd set to the file's directory and passing a
+    bare filename; this helper remains for paths that have no drive letter.
+    """
+    return str(path).replace(BS, '/').replace(':', BS + ':')
+
+
 def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE,
-                      audio_filters: str = "") -> str:
+                      audio_filters: str = "", video_filters: str = "") -> str:
     """trim each surviving range, then concat. Audio gets a short fade at each
     join so a cut through a waveform doesn't click."""
     parts, vlabels, alabels = [], [], []
@@ -80,27 +93,37 @@ def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE
     # Studio Sound runs AFTER the concat, on the finished edit: loudness must
     # be measured across what the listener actually hears, not per fragment.
     tail = "acat" if audio_filters else "aout"
+    vtail = "vcat" if video_filters else "vout"
     # ffmpeg separates filterchains with ';' -- a newline is only whitespace.
-    sep = ";" if audio_filters else ""
+    # A separator is needed whenever ANY chain follows the concat, not just
+    # an audio one -- captions alone would otherwise produce a broken graph.
+    sep = ";" if (audio_filters or (video and video_filters)) else ""
     if video:
         parts.append("".join(f"{v}{a}" for v, a in zip(vlabels, alabels))
-                     + f"concat=n={n}:v=1:a=1[vout][{tail}]{sep}")
+                     + f"concat=n={n}:v=1:a=1[{vtail}][{tail}]{sep}")
     else:
         parts.append("".join(alabels) + f"concat=n={n}:v=0:a=1[{tail}]{sep}")
+    chains = []
+    if video and video_filters:
+        chains.append(f"[vcat]{video_filters}[vout]")
     if audio_filters:
-        parts.append(f"[acat]{audio_filters}[aout]")
+        chains.append(f"[acat]{audio_filters}[aout]")
+    parts.append((SEP_CHAIN.join(chains)) if chains else "")
+    parts = [x for x in parts if x]
     return "\n".join(parts)
 
 
 def render(source: str | Path, plan: EditPlan, out_path: str | Path, *,
            gpu: bool | None = None, crf: int = 20, extra: list[str] | None = None,
-           audio_filters: str = "") -> Path:
+           audio_filters: str = "", video_filters: str = "",
+           cwd: str | Path | None = None) -> Path:
     if not plan.cuts:
         raise ValueError("EditPlan has no surviving cuts -- nothing to render")
     info = media_info(source)
     use_gpu = has_nvenc() if gpu is None else gpu
     graph = build_filtergraph(plan, video=info["has_video"],
-                              audio_filters=audio_filters)
+                              audio_filters=audio_filters,
+                              video_filters=video_filters)
 
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as fh:
@@ -118,7 +141,8 @@ def render(source: str | Path, plan: EditPlan, out_path: str | Path, *,
     cmd += (extra or []) + [str(out_path)]
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True,
+                       cwd=str(cwd) if cwd else None)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"ffmpeg failed:\n{e.stderr[-2000:]}") from e
     finally:

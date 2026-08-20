@@ -24,6 +24,7 @@ around those three.
 | **Instant preview** | The player seeks over deleted ranges instead of re-encoding. Nothing is rendered until export. |
 | **Export + platform presets** | NVENC-accelerated render at source resolution, plus 16:9 / 9:16 / 1:1 / audio-only presets. |
 | **Silence removal** | Trims long pauses out of the middle, leaving a beat at each end. The threshold is measured per file rather than fixed -- a fixed one removed 12% of a well-levelled recording and 78% of a quieter one. |
+| **Animated captions** | Word-level subtitles burned in at export, with the spoken word highlighted inside its phrase. Four styles, sized as a fraction of the frame so vertical and landscape both work. Timed against the EDITED timeline, so they stay in step with cuts. |
 | **Studio Sound** | Levels every export to broadcast loudness (-16 LUFS / -1.5 dBTP) and denoises only when the recording needs it. "Auto" measures speech-to-noise ratio and picks, because denoising a clean take measurably damages it -- see below. |
 
 ### Planned
@@ -31,7 +32,6 @@ around those three.
 | Feature | Approach | Phase |
 |---|---|---|
 | **Filler word removal** | See the honest caveat below — this cannot be done from the transcript alone. | 2 |
-| **Animated captions** | Word timestamps to generated `.ass` subtitles with karaoke highlighting, burned in with ffmpeg. | 3 |
 | **Speaker labels** | pyannote is the strong option but needs a HuggingFace token and licence acceptance; a simpler turn-detector may be enough. Spike first. | 3 |
 | **Clip detection** | Feed the timestamped transcript to a local LLM and ask for the most engaging segments. Free if you already run one locally. | 4 |
 | **Shorts export** | Auto-reframe to 9:16 / 1:1 with captions burned in. | 4 |
