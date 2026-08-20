@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 from paperedit import store
 from paperedit.audio import detect_silences, silence_gaps, snap_points
 from paperedit.edl import Word, derive_cuts
+from paperedit.enhance import PRESETS as SOUND_PRESETS, build_chain, recommend_preset
 from paperedit.render import make_proxy, media_info, render
 
 PORT = 8100
@@ -84,6 +85,19 @@ def _plan(pid: str):
                        fps=p["fps"] or None)
 
 
+def _sound_chain(p: dict) -> tuple[str, str]:
+    """(preset_used, filter_chain) for a project. 'auto' asks the recording."""
+    choice = p["sound_preset"] or "auto"
+    if choice == "auto":
+        try:
+            choice = recommend_preset(p["source"])[0]
+        except Exception:
+            choice = "normalize"
+    if choice not in SOUND_PRESETS:
+        choice = "off"
+    return choice, build_chain(choice)
+
+
 def _ingest(pid: str, jid: str) -> None:
     """Probe -> proxy -> transcribe. The one long job in the app."""
     try:
@@ -109,6 +123,11 @@ def _ingest(pid: str, jid: str) -> None:
         words = transcribe(src, progress=prog)
         store.set_words(pid, words)
 
+        try:
+            preset, snr, _ = recommend_preset(src)
+            store.update_project(pid, sound_snr=round(snr, 2))
+        except Exception:
+            pass                       # a measurement failure must not fail ingest
         store.update_project(pid, status="ready")
         store.update_job(jid, status="done", progress=1.0,
                          message=str(len(words)) + " words")
@@ -129,7 +148,11 @@ def _export(pid: str, jid: str, preset: str) -> None:
         out = store.project_dir(pid) / f"export-{preset}-{int(time.time())}.{ext}"
         store.update_job(jid, progress=0.15,
                          message=f"rendering {len(plan.cuts)} cuts, {plan.duration/60:.1f} min")
-        render(p["source"], plan, out, extra=PRESETS[preset]["args"])
+        used, chain = _sound_chain(p)
+        if chain:
+            store.update_job(jid, message=f"rendering with Studio Sound ({used})")
+        render(p["source"], plan, out, extra=PRESETS[preset]["args"],
+               audio_filters=chain)
         # Report the real duration, not the arithmetic one: ffmpeg's video trim
         # includes the partial frame at each boundary, so the file runs ~0.15%
         # long. Measured in spikes/drift.py -- audio and video stay in sync.
@@ -253,6 +276,37 @@ def api_silence(pid: str, body: dict = Body(...)):
             "pauses_found": len(gaps),
             "seconds_removable": round(sum(e - s for s, e in gaps), 2),
             "duration": round(plan.duration, 3), "cuts": len(plan.cuts)}
+
+
+@app.post("/api/projects/{pid}/sound")
+def api_sound(pid: str, body: dict = Body(...)):
+    """Choose the Studio Sound preset, or leave it on 'auto' to be measured.
+
+    Applied at export only -- it never touches the source file.
+    """
+    p = _project_or_404(pid)
+    choice = str(body.get("preset", "auto"))
+    if choice != "auto" and choice not in SOUND_PRESETS:
+        raise HTTPException(400, "unknown sound preset " + choice)
+    store.update_project(pid, sound_preset=choice)
+    p = _project_or_404(pid)
+    used, chain = _sound_chain(p)
+    why = ""
+    if choice == "auto" and p["source"]:
+        try:
+            _, _, why = recommend_preset(p["source"])
+        except Exception:
+            why = ""
+    snr = p["sound_snr"]
+    if not snr and p["source"]:
+        try:                       # projects ingested before SNR was measured
+            from paperedit.enhance import measure_snr
+            snr = round(measure_snr(p["source"]), 2)
+            store.update_project(pid, sound_snr=snr)
+        except Exception:
+            snr = 0
+    return {"preset": choice, "using": used, "snr": snr,
+            "reason": why, "chain": chain}
 
 
 @app.get("/api/projects/{pid}/plan")

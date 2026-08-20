@@ -162,6 +162,23 @@ kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
           </div>
         </div>
         <div class="card">
+          <div class="row">
+            <b style="flex:1">Studio Sound</b>
+            <select id="soundPreset" style="min-width:130px">
+              <option value="auto">Auto</option>
+              <option value="off">Off</option>
+              <option value="normalize">Levels only</option>
+              <option value="light">Light cleanup</option>
+              <option value="studio">Studio</option>
+              <option value="strong">Strong</option>
+            </select>
+          </div>
+          <div class="small dim" id="soundInfo" style="margin-top:8px">
+            Levels every recording to broadcast loudness. Auto measures the room
+            noise and only denoises if there is something to remove.
+          </div>
+        </div>
+        <div class="card">
           <b>Export</b>
           <div class="row" style="margin-top:10px">
             <select id="preset" style="flex:1"></select>

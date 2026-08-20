@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS projects (
     created     REAL NOT NULL,
     silence_on   INTEGER DEFAULT 0,
     silence_keep REAL DEFAULT 0.3,
-    silence_min  REAL DEFAULT 0.6
+    silence_min  REAL DEFAULT 0.6,
+    sound_preset TEXT DEFAULT 'auto',
+    sound_snr    REAL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS words (
     project_id  TEXT NOT NULL,
@@ -85,6 +87,8 @@ _LATER_COLUMNS = [
     ("silence_on", "INTEGER DEFAULT 0"),
     ("silence_keep", "REAL DEFAULT 0.3"),
     ("silence_min", "REAL DEFAULT 0.6"),
+    ("sound_preset", "TEXT DEFAULT 'auto'"),
+    ("sound_snr", "REAL DEFAULT 0"),
 ]
 
 

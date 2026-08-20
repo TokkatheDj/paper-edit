@@ -56,7 +56,8 @@ def has_nvenc() -> bool:
         return False
 
 
-def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE) -> str:
+def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE,
+                      audio_filters: str = "") -> str:
     """trim each surviving range, then concat. Audio gets a short fade at each
     join so a cut through a waveform doesn't click."""
     parts, vlabels, alabels = [], [], []
@@ -76,21 +77,30 @@ def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE
         alabels.append(f"[a{i}]")
 
     n = len(plan.cuts)
+    # Studio Sound runs AFTER the concat, on the finished edit: loudness must
+    # be measured across what the listener actually hears, not per fragment.
+    tail = "acat" if audio_filters else "aout"
+    # ffmpeg separates filterchains with ';' -- a newline is only whitespace.
+    sep = ";" if audio_filters else ""
     if video:
         parts.append("".join(f"{v}{a}" for v, a in zip(vlabels, alabels))
-                     + f"concat=n={n}:v=1:a=1[vout][aout]")
+                     + f"concat=n={n}:v=1:a=1[vout][{tail}]{sep}")
     else:
-        parts.append("".join(alabels) + f"concat=n={n}:v=0:a=1[aout]")
+        parts.append("".join(alabels) + f"concat=n={n}:v=0:a=1[{tail}]{sep}")
+    if audio_filters:
+        parts.append(f"[acat]{audio_filters}[aout]")
     return "\n".join(parts)
 
 
 def render(source: str | Path, plan: EditPlan, out_path: str | Path, *,
-           gpu: bool | None = None, crf: int = 20, extra: list[str] | None = None) -> Path:
+           gpu: bool | None = None, crf: int = 20, extra: list[str] | None = None,
+           audio_filters: str = "") -> Path:
     if not plan.cuts:
         raise ValueError("EditPlan has no surviving cuts -- nothing to render")
     info = media_info(source)
     use_gpu = has_nvenc() if gpu is None else gpu
-    graph = build_filtergraph(plan, video=info["has_video"])
+    graph = build_filtergraph(plan, video=info["has_video"],
+                              audio_filters=audio_filters)
 
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as fh:

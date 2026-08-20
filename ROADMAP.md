@@ -24,13 +24,13 @@ around those three.
 | **Instant preview** | The player seeks over deleted ranges instead of re-encoding. Nothing is rendered until export. |
 | **Export + platform presets** | NVENC-accelerated render at source resolution, plus 16:9 / 9:16 / 1:1 / audio-only presets. |
 | **Silence removal** | Trims long pauses out of the middle, leaving a beat at each end. The threshold is measured per file rather than fixed -- a fixed one removed 12% of a well-levelled recording and 78% of a quieter one. |
+| **Studio Sound** | Levels every export to broadcast loudness (-16 LUFS / -1.5 dBTP) and denoises only when the recording needs it. "Auto" measures speech-to-noise ratio and picks, because denoising a clean take measurably damages it -- see below. |
 
 ### Planned
 
 | Feature | Approach | Phase |
 |---|---|---|
 | **Filler word removal** | See the honest caveat below — this cannot be done from the transcript alone. | 2 |
-| **Studio-quality audio** | DeepFilterNet (denoise + dereverb) then a mastering chain: highpass, de-ess, compress, `loudnorm` to -16 LUFS. | 2 |
 | **Animated captions** | Word timestamps to generated `.ass` subtitles with karaoke highlighting, burned in with ffmpeg. | 3 |
 | **Speaker labels** | pyannote is the strong option but needs a HuggingFace token and licence acceptance; a simpler turn-detector may be enough. Spike first. | 3 |
 | **Clip detection** | Feed the timestamped transcript to a local LLM and ask for the most engaging segments. Free if you already run one locally. | 4 |
@@ -68,6 +68,22 @@ Removing silence is a feature someone asks for, not something an editor does beh
 browser seeks *over* deleted ranges: on reaching the end of a kept segment it jumps to the
 start of the next. Only export runs ffmpeg. This is the difference between editing that
 feels instant and editing that makes you wait forty seconds to hear a cut.
+
+## Honest caveat: denoising clean audio makes it worse
+
+The obvious design for Studio Sound is one chain applied to everything. Measured, that
+is wrong. Against a fair baseline -- loudness-normalised but not denoised, so both sides
+sit at the same level -- a quiet-room recording came out of every denoise preset with a
+*higher* noise floor, transcription confidence down from 0.931 to 0.914, and words lost.
+The same clip with room noise mixed in went the other way: confidence 0.902 to 0.927 and
+low-confidence words from 6.0% down to 3.2%.
+
+So the app measures the recording's speech-to-noise ratio and chooses. Clean takes get
+levelling only. The thresholds come from those two measurements rather than from taste.
+
+A methodology note worth keeping: comparing an enhanced file against the *raw* file is
+misleading, because `loudnorm` lifts a quiet recording several dB and its hiss with it,
+which makes denoising look actively harmful. Always compare at matched loudness.
 
 ## Honest caveat: filler words
 

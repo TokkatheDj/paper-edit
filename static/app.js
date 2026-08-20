@@ -161,6 +161,8 @@ async function openProject(pid) {
   $('#silMinVal').textContent = parseFloat($('#silMin').value).toFixed(2);
   $('#silBody').classList.toggle('hide', !fresh.silence_on);
   $('#sSil').textContent = '0:00';
+  $('#soundPreset').value = fresh.sound_preset || 'auto';
+  pushSound();
   $('#player').src = '/api/projects/' + pid + '/proxy';
   state.words = await api(`/projects/${pid}/words`);
   renderTranscript();
@@ -383,3 +385,27 @@ for (const id of ['#silKeep', '#silMin']) {
     silTimer = setTimeout(pushSilence, 350);
   };
 }
+
+/* ------------------------------------------------------------- studio sound
+
+   Applied at export only; the source file is never touched. "Auto" measures the
+   recording's speech-to-noise ratio and denoises only when there is noise --
+   denoising a clean take measurably damages it. */
+
+async function pushSound() {
+  const r = await jpost(`/projects/${state.pid}/sound`,
+                        {preset: $('#soundPreset').value});
+  const snr = r.snr ? ` — measured ${r.snr.toFixed(0)} dB signal-to-noise` : '';
+  if (r.preset === 'auto') {
+    $('#soundInfo').textContent = r.reason
+      ? `Auto: ${r.reason}${snr}`
+      : `Auto${snr}`;
+  } else if (r.preset === 'off') {
+    $('#soundInfo').textContent = 'Audio exported untouched.';
+  } else {
+    $('#soundInfo').textContent =
+      `Using ${r.using}. Levelled to −16 LUFS on export.${snr}`;
+  }
+}
+
+$('#soundPreset').onchange = pushSound;
