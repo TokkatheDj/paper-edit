@@ -111,3 +111,70 @@ def test_mark_fillers_only_hits_standalone_fillers():
     words = [w("Um", 0, 1), w("umbrella", 1, 2), w("uh,", 2, 3), w("hello", 3, 4)]
     assert mark_fillers(words) == 2
     assert [x.deleted for x in words] == [True, False, True, False]
+
+
+# --------------------------------------------------------------- silence removal
+
+def test_removing_a_pause_splits_the_cut():
+    plan = derive_cuts([w("a", 0, 1), w("b", 9, 10)], pad=0, duration=10.0,
+                       removed_ranges=[(2.0, 8.0)])
+    assert [(c.start, c.end) for c in plan.cuts] == [(0.0, 2.0), (8.0, 10.0)]
+    assert plan.duration == pytest.approx(4.0)
+
+
+def test_removed_range_outside_any_cut_changes_nothing():
+    words = [w("a", 0, 1), w("x", 1, 2, deleted=True), w("b", 5, 6)]
+    base = derive_cuts(words, pad=0)
+    same = derive_cuts(words, pad=0, removed_ranges=[(2.5, 4.5)])
+    assert [(c.start, c.end) for c in same.cuts] == [(c.start, c.end) for c in base.cuts]
+
+
+def test_removed_range_covering_a_whole_cut_drops_it():
+    plan = derive_cuts([w("a", 0, 1), w("b", 9, 10)], pad=0, duration=10.0,
+                       removed_ranges=[(0.0, 3.0)])
+    assert all(c.start >= 3.0 for c in plan.cuts)
+
+
+def test_overlapping_removed_ranges_do_not_corrupt_the_plan():
+    plan = derive_cuts([w("a", 0, 20)], pad=0, duration=20.0,
+                       removed_ranges=[(5, 10), (8, 12), (11, 13)])
+    for a, b in zip(plan.cuts, plan.cuts[1:]):
+        assert a.end <= b.start
+    assert all(c.end > c.start for c in plan.cuts)
+    assert plan.duration == pytest.approx(12.0)      # 20 minus 5..13
+
+
+def test_silence_removal_never_lands_the_player_in_removed_audio():
+    """The preview seeks over cuts; a bad subtraction would strand the playhead."""
+    plan = derive_cuts([w("a", 0, 30)], pad=0, duration=30.0,
+                       removed_ranges=[(4, 6), (11, 14), (22, 25)])
+    t = 0.0
+    while t < plan.duration:
+        src = plan.output_to_source(t)
+        assert not any(a <= src < b for a, b in [(4, 6), (11, 14), (22, 25)]), src
+        t += 0.05
+
+
+def test_deletions_and_silence_removal_compose():
+    """Both features write to the same cut list and must not fight."""
+    words = [w("keep", 0, 2), w("drop", 3, 4, deleted=True), w("keep2", 10, 12)]
+    plan = derive_cuts(words, pad=0, duration=12.0, removed_ranges=[(5.0, 9.0)])
+    for a, b in zip(plan.cuts, plan.cuts[1:]):
+        assert a.end <= b.start
+    assert not any(c.start < 3.5 < c.end for c in plan.cuts)     # deleted word gone
+    assert not any(c.start < 7.0 < c.end for c in plan.cuts)     # pause gone
+
+
+def test_silence_gaps_leaves_a_natural_beat():
+    from paperedit.audio import silence_gaps
+    # a 2s pause, keeping 0.3s of it
+    gaps = silence_gaps([(10.0, 12.0)], keep=0.3, min_remove=0.6)
+    assert len(gaps) == 1
+    s, e = gaps[0]
+    assert (e - s) == pytest.approx(2.0 - 0.3)
+    assert s > 10.0 and e < 12.0          # trimmed from the middle, not the edges
+
+
+def test_silence_gaps_ignores_short_pauses():
+    from paperedit.audio import silence_gaps
+    assert silence_gaps([(1.0, 1.4)], keep=0.3, min_remove=0.6) == []

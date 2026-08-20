@@ -15,7 +15,7 @@ around those three.
 
 ## Feature status
 
-### Built (Phase 1)
+### Built
 
 | Feature | How |
 |---|---|
@@ -23,12 +23,12 @@ around those three.
 | **Resumable upload** | Chunked upload that survives a dropped connection. Source files are often several GB. |
 | **Instant preview** | The player seeks over deleted ranges instead of re-encoding. Nothing is rendered until export. |
 | **Export + platform presets** | NVENC-accelerated render at source resolution, plus 16:9 / 9:16 / 1:1 / audio-only presets. |
+| **Silence removal** | Trims long pauses out of the middle, leaving a beat at each end. The threshold is measured per file rather than fixed -- a fixed one removed 12% of a well-levelled recording and 78% of a quieter one. |
 
 ### Planned
 
 | Feature | Approach | Phase |
 |---|---|---|
-| **Silence removal** | VAD or ffmpeg `silencedetect`; trim pauses over a threshold. Reliable, already half-built in `paperedit/audio.py`. | 2 |
 | **Filler word removal** | See the honest caveat below — this cannot be done from the transcript alone. | 2 |
 | **Studio-quality audio** | DeepFilterNet (denoise + dereverb) then a mastering chain: highpass, de-ess, compress, `loudnorm` to -16 LUFS. | 2 |
 | **Animated captions** | Word timestamps to generated `.ass` subtitles with karaoke highlighting, burned in with ffmpeg. | 3 |

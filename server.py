@@ -7,6 +7,7 @@ Port 8100 keeps out of the way of the ports local AI tooling tends to claim
 """
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 import time
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from paperedit import store
-from paperedit.audio import detect_silences, snap_points
+from paperedit.audio import detect_silences, silence_gaps, snap_points
 from paperedit.edl import Word, derive_cuts
 from paperedit.render import make_proxy, media_info, render
 
@@ -56,24 +57,31 @@ def _words(pid: str) -> list[Word]:
             for w in store.get_words(pid)]
 
 
-def _plan(pid: str):
-    """Cuts derived from the surviving words, snapped to silence.
+def _silences(pid: str, src: str) -> list[tuple[float, float]]:
+    """Detected silences for a project, cached -- it is a full pass over the
+    audio and the answer never changes for a given source file."""
+    cache = store.project_dir(pid) / "silences.json"
+    if cache.exists():
+        return [tuple(x) for x in json.loads(cache.read_text())]
+    found = detect_silences(src, min_dur=0.20)      # threshold measured per file
+    cache.write_text(json.dumps(found))
+    return found
 
-    Silence detection is cached per project -- it is a full pass over the audio
-    and the answer never changes for a given source file.
-    """
+
+def _plan(pid: str):
+    """Cuts derived from the surviving words, snapped to silence, with dead air
+    removed if the project asks for it."""
     p = _project_or_404(pid)
     src = p["source"]
-    pts = []
+    sil: list[tuple[float, float]] = []
     if src and Path(src).exists():
-        cache = store.project_dir(pid) / "silences.txt"
-        if cache.exists():
-            pts = [float(x) for x in cache.read_text().split() if x]
-        else:
-            pts = snap_points(detect_silences(src))
-            cache.write_text(" ".join(str(x) for x in pts))
-    return derive_cuts(_words(pid), snap_points=pts, snap_tolerance=0.15,
-                       duration=p["duration"] or None, fps=p["fps"] or None)
+        sil = _silences(pid, src)
+    removed = []
+    if p["silence_on"]:
+        removed = silence_gaps(sil, keep=p["silence_keep"], min_remove=p["silence_min"])
+    return derive_cuts(_words(pid), snap_points=snap_points(sil), snap_tolerance=0.15,
+                       removed_ranges=removed, duration=p["duration"] or None,
+                       fps=p["fps"] or None)
 
 
 def _ingest(pid: str, jid: str) -> None:
@@ -221,6 +229,30 @@ def api_set_deleted(pid: str, body: dict = Body(...)):
     n = store.set_deleted(pid, body.get("indices", []), bool(body.get("deleted", True)))
     plan = _plan(pid)
     return {"updated": n, "duration": round(plan.duration, 3), "cuts": len(plan.cuts)}
+
+
+@app.post("/api/projects/{pid}/silence")
+def api_silence(pid: str, body: dict = Body(...)):
+    """Turn dead-air removal on or off, and tune how much of each pause to keep.
+
+    Non-destructive like everything else: it only changes how the cut list is
+    derived, so switching it off puts every pause straight back.
+    """
+    p = _project_or_404(pid)
+    on = bool(body.get("enabled", True))
+    keep = max(0.0, min(2.0, float(body.get("keep", p["silence_keep"]))))
+    min_remove = max(0.15, min(5.0, float(body.get("min_remove", p["silence_min"]))))
+    store.update_project(pid, silence_on=int(on), silence_keep=keep,
+                         silence_min=min_remove)
+
+    src = p["source"]
+    sil = _silences(pid, src) if src and Path(src).exists() else []
+    gaps = silence_gaps(sil, keep=keep, min_remove=min_remove)
+    plan = _plan(pid)
+    return {"enabled": on, "keep": keep, "min_remove": min_remove,
+            "pauses_found": len(gaps),
+            "seconds_removable": round(sum(e - s for s, e in gaps), 2),
+            "duration": round(plan.duration, 3), "cuts": len(plan.cuts)}
 
 
 @app.get("/api/projects/{pid}/plan")

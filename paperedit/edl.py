@@ -72,12 +72,36 @@ def _snap(t: float, points: Sequence[float], tolerance: float) -> float:
     return best if abs(best - t) <= tolerance else t
 
 
+def _subtract(cuts: list[Cut], ranges: Sequence[tuple[float, float]]) -> list[Cut]:
+    """Remove `ranges` from `cuts`, splitting a cut when a range lands inside it.
+
+    Applied AFTER padding and snapping: a pause we decided to remove must not be
+    padded back in at the edges.
+    """
+    out = list(cuts)
+    for rs, re in sorted(ranges):
+        if re <= rs:
+            continue
+        nxt: list[Cut] = []
+        for c in out:
+            if re <= c.start or rs >= c.end:      # no overlap
+                nxt.append(c)
+                continue
+            if rs > c.start:                       # keep the head
+                nxt.append(Cut(c.start, min(rs, c.end)))
+            if re < c.end:                         # keep the tail
+                nxt.append(Cut(max(re, c.start), c.end))
+        out = nxt
+    return [c for c in out if c.end > c.start]
+
+
 def derive_cuts(
     words: Iterable[Word],
     *,
     pad: float = 0.04,
     snap_points: Sequence[float] = (),
     snap_tolerance: float = 0.15,
+    removed_ranges: Sequence[tuple[float, float]] = (),
     duration: float | None = None,
     fps: float | None = None,
 ) -> EditPlan:
@@ -89,6 +113,10 @@ def derive_cuts(
     5:00 recording came back as 2:56 with nothing deleted. Silence removal is a
     Phase 2 feature she asks for, not something the editor does behind her back.
 
+    removed_ranges  source spans to excise regardless of the words -- how silence
+                    removal expresses itself. Silence is not a word, so it cannot
+                    be represented by the `deleted` flag; it is subtracted from
+                    the runs instead. Both features still resolve to one cut list.
     pad             breathing room kept either side of a surviving run
     snap_points     candidate silence midpoints to align boundaries to; cutting
                     exactly on a word boundary clips consonants, because Whisper
@@ -136,6 +164,9 @@ def derive_cuts(
             round(s * fps) / fps, round(e * fps) / fps)
         if e > s:
             cuts.append(Cut(s, e))
+
+    if removed_ranges:
+        cuts = _subtract(cuts, removed_ranges)
 
     # Snapping can push neighbours into overlap; fold those together.
     merged: list[Cut] = []

@@ -31,7 +31,10 @@ CREATE TABLE IF NOT EXISTS projects (
     width       INTEGER DEFAULT 0,
     height      INTEGER DEFAULT 0,
     has_video   INTEGER DEFAULT 0,
-    created     REAL NOT NULL
+    created     REAL NOT NULL,
+    silence_on   INTEGER DEFAULT 0,
+    silence_keep REAL DEFAULT 0.3,
+    silence_min  REAL DEFAULT 0.6
 );
 CREATE TABLE IF NOT EXISTS words (
     project_id  TEXT NOT NULL,
@@ -75,8 +78,24 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+# Columns added after the first release. SQLite has no "ADD COLUMN IF NOT
+# EXISTS", so we add them and shrug off the duplicate error -- simpler and safer
+# than tracking a migration version for a single-user local app.
+_LATER_COLUMNS = [
+    ("silence_on", "INTEGER DEFAULT 0"),
+    ("silence_keep", "REAL DEFAULT 0.3"),
+    ("silence_min", "REAL DEFAULT 0.6"),
+]
+
+
 def init() -> None:
     conn = connect()
+    for name, decl in _LATER_COLUMNS:
+        try:
+            conn.execute(f"ALTER TABLE projects ADD COLUMN {name} {decl}")
+        except sqlite3.OperationalError:
+            pass                      # already there
+    conn.commit()
     # A job marked running at startup cannot be running -- nothing survived the
     # restart. Mark it plainly rather than leaving a spinner forever.
     conn.execute(

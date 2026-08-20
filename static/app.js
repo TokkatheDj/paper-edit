@@ -153,6 +153,14 @@ async function openProject(pid) {
   if (fresh.status !== 'ready') return;
 
   state.duration = fresh.duration;
+  // Restore the project's own dead-air settings rather than the last project's.
+  $('#silToggle').checked = !!fresh.silence_on;
+  $('#silKeep').value = fresh.silence_keep ?? 0.3;
+  $('#silMin').value = fresh.silence_min ?? 0.6;
+  $('#silKeepVal').textContent = parseFloat($('#silKeep').value).toFixed(2);
+  $('#silMinVal').textContent = parseFloat($('#silMin').value).toFixed(2);
+  $('#silBody').classList.toggle('hide', !fresh.silence_on);
+  $('#sSil').textContent = '0:00';
   $('#player').src = '/api/projects/' + pid + '/proxy';
   state.words = await api(`/projects/${pid}/words`);
   renderTranscript();
@@ -342,3 +350,36 @@ $('#expBtn').onclick = async () => {
   }
   loadProjects();
 })();
+
+/* ---------------------------------------------------------- dead air removal
+
+   Non-destructive: this only changes how the cut list is derived on the server,
+   so turning it off puts every pause straight back. */
+
+async function pushSilence() {
+  const on = $('#silToggle').checked;
+  $('#silBody').classList.toggle('hide', !on);
+  const body = {
+    enabled: on,
+    keep: parseFloat($('#silKeep').value),
+    min_remove: parseFloat($('#silMin').value),
+  };
+  const r = await jpost(`/projects/${state.pid}/silence`, body);
+  $('#silInfo').textContent = on
+    ? `${r.pauses_found} pauses found, removing ${fmt(r.seconds_removable)} of dead air`
+    : 'Trims long pauses out of the middle, leaving a beat at each end.';
+  $('#sSil').textContent = on ? fmt(r.seconds_removable) : '0:00';
+  await refreshPlan();
+}
+
+$('#silToggle').onchange = pushSilence;
+let silTimer = null;
+for (const id of ['#silKeep', '#silMin']) {
+  $(id).oninput = () => {
+    $('#silKeepVal').textContent = parseFloat($('#silKeep').value).toFixed(2);
+    $('#silMinVal').textContent = parseFloat($('#silMin').value).toFixed(2);
+    // Debounced: dragging a slider should not fire a request per pixel.
+    clearTimeout(silTimer);
+    silTimer = setTimeout(pushSilence, 350);
+  };
+}
