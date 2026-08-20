@@ -1,0 +1,8 @@
+faster-whisper==1.2.1      # transcription; pulls ctranslate2 + onnxruntime
+numpy                      # click/level analysis
+pytest                     # EDL tests
+
+# GPU only. Ships the cublas/cudnn DLLs ctranslate2 loads by name; without these
+# device="cuda" constructs fine and then dies at first inference.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12

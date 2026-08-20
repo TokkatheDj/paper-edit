@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+spikes/media/
+spikes/out/
+projects/
+*.mp4
+*.wav
+*.mkv
