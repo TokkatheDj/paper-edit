@@ -3,6 +3,11 @@
 A local, text-based video editor — edit long-form video and podcasts by editing the
 transcript. Everything runs on your own machine: no cloud, no subscription, no account.
 
+![The Paper Edit editor: transcript on the left with deleted words struck through, preview and export on the right](docs/screenshot.png)
+
+*Struck-through words are gone from the video. The preview skips them immediately — nothing
+is re-encoded until you export. (Sample audio: [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/), CC BY 4.0.)*
+
 **Status: Phase 1 working end to end** — upload, transcribe, edit the transcript, export.
 See `FINDINGS.md` for what was measured, and `ROADMAP.md` for what is built,
 what is planned, and what is deliberately left out.
