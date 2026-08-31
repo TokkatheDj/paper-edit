@@ -186,6 +186,15 @@ def _norm(text: str) -> str:
     return text.strip().strip(".,!?;:-\u2014\"'").lower()
 
 
+def is_filler(text: str, vocabulary: set[str] = FILLERS) -> bool:
+    """Is this word a filler standing on its own?
+
+    The one place that question is answered, so the editor's button and
+    mark_fillers() can never drift apart on what counts as an "um".
+    """
+    return _norm(text) in vocabulary
+
+
 def mark_fillers(words: Sequence[Word], vocabulary: set[str] = FILLERS) -> int:
     """Delete filler words Whisper actually spelled out.
 
@@ -195,7 +204,7 @@ def mark_fillers(words: Sequence[Word], vocabulary: set[str] = FILLERS) -> int:
     """
     n = 0
     for w in words:
-        if not w.deleted and _norm(w.text) in vocabulary:
+        if not w.deleted and is_filler(w.text, vocabulary):
             w.deleted = True
             n += 1
     return n

@@ -161,6 +161,7 @@ async function openProject(pid) {
   $('#silMinVal').textContent = parseFloat($('#silMin').value).toFixed(2);
   $('#silBody').classList.toggle('hide', !fresh.silence_on);
   $('#sSil').textContent = '0:00';
+  $('#fillInfo').textContent = FILL_DEFAULT;
   $('#soundPreset').value = fresh.sound_preset || 'auto';
   $('#capStyle').value = fresh.caption_style || 'off';
   pushSound();
@@ -426,3 +427,44 @@ async function pushCaptions() {
 }
 
 $('#capStyle').onchange = pushCaptions;
+
+/* ------------------------------------------------------------ filler words
+
+   The transcript-side half of "take out the ums". Whisper writes down only
+   7-17% of the fillers a person hears (FINDINGS.md), so the copy says so
+   rather than promising a clean take -- dead air removal does the rest.
+
+   Routed through the same undo stack as a hand-made edit, so one click of
+   Undo reverses it and nothing about it is a special case. */
+
+const FILL_DEFAULT = $('#fillInfo').textContent;
+
+async function pushFillers(deleted) {
+  const btn = deleted ? $('#fillBtn') : $('#fillUndoBtn');
+  btn.disabled = true;
+  try {
+    const r = await jpost(`/projects/${state.pid}/fillers`, {deleted});
+    if (!r.marked) {
+      $('#fillInfo').textContent = 'No fillers written down in this transcript. '
+        + 'Whisper tidies most of them away - use Remove dead air for the gaps they leave.';
+      return;
+    }
+    state.undo.push({idx: r.indices, deleted: !deleted});
+    r.indices.forEach(i => {
+      const w = state.words.find(x => x.idx === i);
+      if (w) w.deleted = deleted ? 1 : 0;
+    });
+    renderTranscript();
+    await refreshPlan();
+    $('#fillInfo').textContent = deleted
+      ? `${r.marked} filler words taken out. Put back or Undo reverses it.`
+      : `${r.marked} filler words put back.`;
+  } catch (e) {
+    toast('Filler words: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$('#fillBtn').onclick = () => pushFillers(true);
+$('#fillUndoBtn').onclick = () => pushFillers(false);

@@ -118,6 +118,36 @@ def test_deleting_words_shortens_the_edit(client, project):
         pytest.approx(before["duration"], abs=0.05)
 
 
+def test_removing_fillers_is_reversible(client, project):
+    """The "um" button must remove exactly the fillers the transcript spells
+    out, and putting them back must return the edit to its original length.
+
+    The expected set is computed with the same predicate the server uses rather
+    than a hand-written list, so this fails if the two ever drift apart.
+    """
+    from paperedit.edl import is_filler
+
+    before = client.get(f"/api/projects/{project}/plan").json()
+    words = client.get(f"/api/projects/{project}/words").json()
+    expected = [w["idx"] for w in words if is_filler(w["text"])]
+    if not expected:
+        pytest.skip("this transcript spells out no fillers -- nothing to remove")
+
+    r = client.post(f"/api/projects/{project}/fillers", json={"deleted": True}).json()
+    assert r["indices"] == expected
+    assert r["marked"] == len(expected)
+    assert r["duration"] < before["duration"]
+
+    after = client.get(f"/api/projects/{project}/words").json()
+    assert all(w["deleted"] for w in after if w["idx"] in set(expected))
+
+    back = client.post(f"/api/projects/{project}/fillers", json={"deleted": False}).json()
+    assert back["marked"] == len(expected)
+    assert back["duration"] == pytest.approx(before["duration"], abs=0.05)
+    restored = client.get(f"/api/projects/{project}/words").json()
+    assert not any(w["deleted"] for w in restored if w["idx"] in set(expected))
+
+
 def test_export_matches_the_plan(client, project):
     words = client.get(f"/api/projects/{project}/words").json()
     doomed = [w["idx"] for w in words if 60.0 <= w["start"] <= 90.0]

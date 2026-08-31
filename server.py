@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from paperedit import store
 from paperedit.audio import detect_silences, silence_gaps, snap_points
-from paperedit.edl import Word, derive_cuts
+from paperedit.edl import Word, derive_cuts, is_filler
 from paperedit.captions import PRESETS as CAPTION_PRESETS, words_on_output_timeline, write_ass
 from paperedit.enhance import PRESETS as SOUND_PRESETS, build_chain, recommend_preset
 from paperedit.render import escape_filter_path
@@ -300,6 +300,26 @@ def api_silence(pid: str, body: dict = Body(...)):
     return {"enabled": on, "keep": keep, "min_remove": min_remove,
             "pauses_found": len(gaps),
             "seconds_removable": round(sum(e - s for s, e in gaps), 2),
+            "duration": round(plan.duration, 3), "cuts": len(plan.cuts)}
+
+
+@app.post("/api/projects/{pid}/fillers")
+def api_fillers(pid: str, body: dict = Body(default={})):
+    """Delete -- or put back -- the filler words the transcript spells out.
+
+    Deliberately the cheap half of the job. Whisper transcribes only 7-17% of
+    the fillers a person actually hears (FINDINGS.md), so this catches the ones
+    it wrote down and dead-air removal does the heavier lifting on the rest.
+
+    Returns the indices it touched, so the browser can undo it exactly like a
+    hand-made edit rather than treating it as a special case.
+    """
+    _project_or_404(pid)
+    deleted = bool(body.get("deleted", True))
+    idx = [w["idx"] for w in store.get_words(pid) if is_filler(w["text"])]
+    store.set_deleted(pid, idx, deleted)
+    plan = _plan(pid)
+    return {"marked": len(idx), "indices": idx, "deleted": deleted,
             "duration": round(plan.duration, 3), "cuts": len(plan.cuts)}
 
 

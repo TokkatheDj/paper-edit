@@ -99,6 +99,18 @@ hypothesis was wrong). Since audio and video stay locked to each other, this is 
 length-*prediction* offset, not a sync defect: report export duration from `ffprobe` rather
 than trusting the arithmetic.
 
+Caveat found later, while adding filler removal: the 0-4 ms figure above is from
+**synthetic, evenly spaced** cuts. With real transcript-derived cuts the video/audio
+duration difference is usually a few ms but has been measured at **67 ms** (~2 frames at
+30 fps) on some cut sets, which trips the `< 0.05` assertion in
+`tests/test_api.py::test_export_matches_the_plan`. The test is therefore **intermittent
+when Whisper runs on CPU**: multi-threaded float reduction makes the transcript vary
+slightly between runs, which moves the cut boundaries. Observed failing twice and passing
+twice on identical code. It is a difference in total stream length, not progressive
+desync -- `spikes/drift.py` shows the offset is a constant tail, not per-cut -- so it is
+not audible or visible in the export. Left as-is rather than widening the threshold,
+because the threshold is the only thing watching for real desync.
+
 ## 6. Decisions this locks in
 
 - Skip the Python 3.12 install. Use `.venv` on 3.14.
