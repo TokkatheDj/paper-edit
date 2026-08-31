@@ -176,3 +176,72 @@ def test_export_matches_the_plan(client, project):
     assert kinds["video"] == pytest.approx(plan["duration"], rel=0.01)
 
     assert client.get(f"/api/projects/{project}/file/{job['result']}").status_code == 200
+
+
+def _probe(path, entries, stream=None):
+    cmd = ["ffprobe", "-v", "error"]
+    if stream:
+        cmd += ["-select_streams", stream]
+    cmd += ["-show_entries", entries, "-of", "csv=p=0", str(path)]
+    return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_platform_presets_render_at_the_right_size(client, project):
+    """The reframing presets must go through the complex filtergraph.
+
+    They were passed as `-vf` in `extra`, which ffmpeg refuses alongside the
+    -filter_complex the cut list already needs ("Simple and complex filtering
+    cannot be used together for the same stream"). Every export except
+    "source" failed the moment it was used, and no test covered it -- so the
+    exports she actually needs for Instagram and YouTube are pinned here.
+
+    Captions are switched on deliberately: reframe + burn-in together is the
+    combination that broke.
+    """
+    from paperedit import store
+
+    words = client.get(f"/api/projects/{project}/words").json()
+    keep = {w["idx"] for w in words if 10.0 <= w["start"] <= 25.0}
+    assert keep, "expected words in that range"
+    client.post(f"/api/projects/{project}/words",
+                json={"indices": [w["idx"] for w in words if w["idx"] not in keep],
+                      "deleted": True})
+    client.post(f"/api/projects/{project}/captions", json={"style": "highlight"})
+    try:
+        for preset, expected in (("reels", (1080, 1920)), ("square", (1080, 1080))):
+            jid = client.post(f"/api/projects/{project}/export",
+                              json={"preset": preset}).json()["job"]
+            job = _wait(client, jid)
+            assert job["status"] == "done", preset + ": " + str(job["message"])
+            out = store.project_dir(project) / job["result"]
+            size = _probe(out, "stream=width,height", stream="v:0")
+            assert tuple(int(x) for x in size.split(",")[:2]) == expected,                 preset + " rendered at " + size
+            out.unlink(missing_ok=True)
+    finally:
+        client.post(f"/api/projects/{project}/captions", json={"style": "off"})
+        client.post(f"/api/projects/{project}/words",
+                    json={"indices": [w["idx"] for w in words], "deleted": False})
+
+
+def test_audio_only_export_has_no_video(client, project):
+    """`-vn` cannot be used to do this: the render maps the filtered video
+    onto the output, so the two flags contradict each other."""
+    from paperedit import store
+
+    words = client.get(f"/api/projects/{project}/words").json()
+    keep = {w["idx"] for w in words if 10.0 <= w["start"] <= 25.0}
+    client.post(f"/api/projects/{project}/words",
+                json={"indices": [w["idx"] for w in words if w["idx"] not in keep],
+                      "deleted": True})
+    try:
+        jid = client.post(f"/api/projects/{project}/export",
+                          json={"preset": "audio"}).json()["job"]
+        job = _wait(client, jid)
+        assert job["status"] == "done", job["message"]
+        out = store.project_dir(project) / job["result"]
+        kinds = _probe(out, "stream=codec_type").split()
+        assert "audio" in " ".join(kinds) and "video" not in " ".join(kinds), kinds
+        out.unlink(missing_ok=True)
+    finally:
+        client.post(f"/api/projects/{project}/words",
+                    json={"indices": [w["idx"] for w in words], "deleted": False})

@@ -116,12 +116,23 @@ def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE
 def render(source: str | Path, plan: EditPlan, out_path: str | Path, *,
            gpu: bool | None = None, crf: int = 20, extra: list[str] | None = None,
            audio_filters: str = "", video_filters: str = "",
-           cwd: str | Path | None = None) -> Path:
+           video: bool | None = None, cwd: str | Path | None = None) -> Path:
+    """Render the plan to out_path.
+
+    Reframing and scaling belong in `video_filters`, NOT in `extra` as a -vf:
+    the cut list is already a complex filtergraph, and ffmpeg refuses to apply
+    simple and complex filtering to the same stream.
+
+    `video=False` drops the video stream entirely (an audio-only export) --
+    again not via `-vn` in `extra`, which would contradict the -map that puts
+    the filtered video on the output.
+    """
     if not plan.cuts:
         raise ValueError("EditPlan has no surviving cuts -- nothing to render")
     info = media_info(source)
+    want_video = info["has_video"] and video is not False
     use_gpu = has_nvenc() if gpu is None else gpu
-    graph = build_filtergraph(plan, video=info["has_video"],
+    graph = build_filtergraph(plan, video=want_video,
                               audio_filters=audio_filters,
                               video_filters=video_filters)
 
@@ -132,7 +143,7 @@ def render(source: str | Path, plan: EditPlan, out_path: str | Path, *,
 
     cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(source),
            "-filter_complex_script", script]
-    if info["has_video"]:
+    if want_video:
         cmd += ["-map", "[vout]"]
         cmd += (["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(crf)]
                 if use_gpu else ["-c:v", "libx264", "-preset", "veryfast",

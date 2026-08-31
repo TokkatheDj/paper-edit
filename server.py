@@ -34,16 +34,16 @@ app = FastAPI(title="Paper Edit")
 # Export presets: each platform gets the shape it actually wants, so she is not
 # guessing at resolutions after the edit is done.
 PRESETS = {
-    "source":  {"label": "Original quality", "args": []},
+    "source":  {"label": "Original quality",     "vf": "", "video": True},
     "youtube": {"label": "YouTube 1080p 16:9",
-                "args": ["-vf", "scale=-2:1080", "-r", "30"]},
+                "vf": "scale=-2:1080,fps=30", "video": True},
     "reels":   {"label": "Reels / Shorts 9:16",
-                "args": ["-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-                         "-r", "30"]},
+                "vf": "scale=1080:1920:force_original_aspect_ratio=increase,"
+                      "crop=1080:1920,fps=30", "video": True},
     "square":  {"label": "Feed 1:1",
-                "args": ["-vf", "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080",
-                         "-r", "30"]},
-    "audio":   {"label": "Audio only (podcast)", "args": ["-vn"]},
+                "vf": "scale=1080:1080:force_original_aspect_ratio=increase,"
+                      "crop=1080:1080,fps=30", "video": True},
+    "audio":   {"label": "Audio only (podcast)", "vf": "", "video": False},
 }
 
 
@@ -100,7 +100,24 @@ def _sound_chain(p: dict) -> tuple[str, str]:
     return choice, build_chain(choice)
 
 
-def _caption_filter(pid: str, p: dict, plan) -> str:
+def _output_size(p: dict, preset: str) -> tuple[int, int]:
+    """The frame size this export will really have.
+
+    Captions are authored for these dimensions, not the source's: an .ass
+    written for a 1920x1080 frame and burned into a 1080x1920 one gets
+    stretched by libass.
+    """
+    w, h = p["width"] or 1920, p["height"] or 1080
+    if preset == "reels":
+        return 1080, 1920
+    if preset == "square":
+        return 1080, 1080
+    if preset == "youtube":                     # height fixed, width follows
+        return max(2, int(round(w / h * 1080)) // 2 * 2), 1080
+    return w, h
+
+
+def _caption_filter(pid: str, p: dict, plan, width: int, height: int) -> str:
     """Write the .ass for this edit and return the filter that burns it in.
 
     Regenerated per export, deliberately: the caption timings depend on the cut
@@ -113,8 +130,7 @@ def _caption_filter(pid: str, p: dict, plan) -> str:
     if not words:
         return ""
     path = store.project_dir(pid) / "captions.ass"
-    write_ass(words, path, width=p["width"] or 1920, height=p["height"] or 1080,
-              style=style)
+    write_ass(words, path, width=width, height=height, style=style)
     # A BARE filename, with ffmpeg run from the project directory. Escaping the
     # drive colon inside a filter argument does not survive ffmpeg's option
     # splitting on Windows; removing the colon entirely does.
@@ -171,13 +187,19 @@ def _export(pid: str, jid: str, preset: str) -> None:
         out = store.project_dir(pid) / f"export-{preset}-{int(time.time())}.{ext}"
         store.update_job(jid, progress=0.15,
                          message=f"rendering {len(plan.cuts)} cuts, {plan.duration/60:.1f} min")
-        vfilter = _caption_filter(pid, p, plan)
+        spec = PRESETS[preset]
+        caption = ""
+        if spec["video"]:
+            caption = _caption_filter(pid, p, plan, *_output_size(p, preset))
+        # Reframe first, then burn the captions on the reframed picture --
+        # the other order would crop the text off the sides of a 9:16 export.
+        vfilter = ",".join(x for x in (spec["vf"], caption) if x)
         used, chain = _sound_chain(p)
         if chain:
             store.update_job(jid, message=f"rendering with Studio Sound ({used})")
-        render(p["source"], plan, out, extra=PRESETS[preset]["args"],
+        render(p["source"], plan, out, video=spec["video"],
                audio_filters=chain, video_filters=vfilter,
-               cwd=store.project_dir(pid) if vfilter else None)
+               cwd=store.project_dir(pid) if caption else None)
         # Report the real duration, not the arithmetic one: ffmpeg's video trim
         # includes the partial frame at each boundary, so the file runs ~0.15%
         # long. Measured in spikes/drift.py -- audio and video stay in sync.
