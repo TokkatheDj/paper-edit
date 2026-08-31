@@ -85,7 +85,7 @@ python -m venv .venv
 | `paperedit/transcribe.py` | Word-level transcription; large-v3 on the GPU when it is free, small on CPU otherwise. |
 | `server.py` | FastAPI on :8100 — resumable upload, ingest, edit, export. |
 | `static/` | The editor UI. Plain HTML and JS, no build step. |
-| `activity.py` | `Editor Activity.cmd` -- did it get used, and did anything fail quietly? Read-only. |
+| `activity.py` | `Editor Activity.cmd` -- did it get used, and did anything fail quietly? Lists signed-in devices by label. Read-only. |
 | `spikes/` | The Phase 0 measurements. Each script prints its own numbers. |
 | `tests/` | 42 tests: EDL invariants, sign-in and session revocation, the filler-word endpoint against seeded words, and a full upload-to-export run against real media. |
 

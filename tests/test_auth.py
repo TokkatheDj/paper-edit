@@ -107,3 +107,75 @@ def test_a_finished_export_is_not_downloadable_while_signed_out(client):
     video sits behind /file/ and must not be fetchable without signing in."""
     r = client.get("/api/projects/anything/file/export.mp4")
     assert r.status_code == 401
+
+
+# --------------------------------------------------------------- device labels
+
+@pytest.mark.parametrize("ua,expected", [
+    ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
+     " (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", "iPhone / Safari"),
+    ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+     " (KHTML, like Gecko) Chrome/120.0 Safari/537.36", "Mac / Chrome"),
+    # Edge claims to be Chrome AND Safari; Chrome claims to be Safari. Order matters.
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like"
+     " Gecko) Chrome/120.0 Safari/537.36 Edg/120.0", "Windows / Edge"),
+    ("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/120"
+     " Mobile Safari/537.36", "Android / Chrome"),
+    # The whole point: an automated check must not look like a person.
+    ("Mozilla/5.0 (Windows NT 10.0) WindowsPowerShell/5.1", "PowerShell script"),
+    ("curl/8.4.0", "curl script"),
+    ("python-httpx/0.27.0", "Python script"),
+    ("", "Unknown device"),
+    (None, "Unknown device"),
+])
+def test_device_labels_read_like_devices(ua, expected):
+    from paperedit.auth import device_label
+    assert device_label(ua) == expected
+
+
+def test_labels_stay_ascii():
+    """These get printed to a Windows console by Editor Activity.cmd, where a
+    stray non-ASCII character is an exception rather than a cosmetic issue."""
+    from paperedit.auth import device_label
+    for ua in ("Mozilla/5.0 (iPhone) Safari/604.1", "curl/8.4.0", "nonsense"):
+        device_label(ua).encode("ascii")
+
+
+def test_a_sign_in_records_what_signed_in(client):
+    from paperedit import store
+    client.post("/api/session", json={"password": PASSWORD},
+                headers={"User-Agent": "Mozilla/5.0 (iPhone) Version/17.0 Safari/604.1"})
+    row = store.connect().execute(
+        "SELECT label, address, created, last_seen FROM sessions").fetchone()
+    assert row["label"] == "iPhone / Safari"
+    assert row["address"]                        # whatever the client was
+    assert row["last_seen"] >= row["created"]
+
+
+def test_last_seen_moves_when_the_session_is_used(client):
+    """Distinguishing a device that was used this morning from one that signed
+    in a fortnight ago is the entire point of the column."""
+    import time as _t
+    from paperedit import store
+    client.post("/api/session", json={"password": PASSWORD})
+    conn = store.connect()
+    # Backdate past the throttle window so the next request must write.
+    conn.execute("UPDATE sessions SET last_seen = ?", (_t.time() - 600,))
+    conn.commit()
+    before = conn.execute("SELECT last_seen FROM sessions").fetchone()["last_seen"]
+
+    assert client.get("/api/health").status_code == 200
+    after = conn.execute("SELECT last_seen FROM sessions").fetchone()["last_seen"]
+    assert after > before
+
+
+def test_last_seen_is_not_written_on_every_request(client):
+    """One write per request would be a database write for every video chunk."""
+    from paperedit import store
+    client.post("/api/session", json={"password": PASSWORD})
+    conn = store.connect()
+    first = conn.execute("SELECT last_seen FROM sessions").fetchone()["last_seen"]
+    for _ in range(3):
+        client.get("/api/health")
+    assert conn.execute(
+        "SELECT last_seen FROM sessions").fetchone()["last_seen"] == first

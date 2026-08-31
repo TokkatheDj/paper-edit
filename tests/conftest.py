@@ -27,7 +27,17 @@ def isolated_storage(tmp_path_factory):
 
 
 def sign_in(client):
-    """First call against an empty database sets the password and signs in."""
+    """Sign a test client in, whatever the auth tests left behind.
+
+    The suite shares one temp database, and test_auth.py deliberately changes
+    the password and trips the guess throttle. Neither should decide whether an
+    unrelated test can reach the API, so this forces a known password and
+    clears the throttle rather than assuming a first-run database.
+    """
+    from paperedit import auth
+    if not auth.has_password() or not auth.check_password(TEST_PASSWORD):
+        auth.set_password(TEST_PASSWORD)
+    auth._fails.clear()
     r = client.post("/api/session", json={"password": TEST_PASSWORD})
     assert r.status_code == 200, r.text
     return client

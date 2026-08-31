@@ -220,7 +220,7 @@ PUBLIC_PATHS = {"/login", "/login.html", "/api/session", "/favicon.ico"}
 @app.middleware("http")
 async def require_sign_in(request: Request, call_next):
     path = request.url.path
-    if path in PUBLIC_PATHS or auth.valid_session(request.cookies.get(auth.COOKIE)):
+    if path in PUBLIC_PATHS or auth.see_session(request.cookies.get(auth.COOKIE)):
         return await call_next(request)
     # An API caller gets a status it can act on; a person gets the sign-in page.
     if path.startswith("/api/"):
@@ -264,7 +264,10 @@ def api_sign_in(request: Request, body: dict = Body(...)):
         raise HTTPException(401, "that is not the password")
 
     auth.clear_failures(who)
-    token = auth.new_session()
+    # Label the session by what signed in, so a list of devices is something a
+    # person can actually read -- and so an automated check is visibly a script
+    # rather than looking like somebody using the editor.
+    token = auth.new_session(auth.device_label(request.headers.get("user-agent")), who)
     r = JSONResponse({"ok": True})
     # Not Secure: this is plain http on a home LAN, and a Secure cookie would
     # simply never be sent. Lax keeps it off cross-site requests.

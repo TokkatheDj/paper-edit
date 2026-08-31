@@ -83,15 +83,90 @@ def clear_failures(who: str) -> None:
     _fails.pop(who, None)
 
 
-def new_session() -> str:
+# How often a session's "last seen" is written. Every request would mean a
+# database write per request for no extra insight.
+TOUCH_EVERY = 300.0
+
+
+def device_label(user_agent: str | None) -> str:
+    """A short, human-readable name for whatever signed in.
+
+    Deliberately coarse: enough to tell a phone from a laptop from a script,
+    and no more. Scripts are checked first and named as such, because the most
+    confusing thing in this list is your own automated check looking like a
+    person. Kept to plain ASCII -- this gets printed to a Windows console.
+    """
+    ua = user_agent or ""
+    for needle, name in (("PowerShell", "PowerShell script"),
+                         ("curl", "curl script"),
+                         ("python", "Python script"),
+                         ("httpx", "Python script"),
+                         ("Wget", "Wget script")):
+        if needle.lower() in ua.lower():
+            return name
+
+    if "iPhone" in ua:
+        system = "iPhone"
+    elif "iPad" in ua:
+        system = "iPad"
+    elif "Android" in ua:
+        system = "Android"
+    elif "Windows" in ua:
+        system = "Windows"
+    elif "Macintosh" in ua or "Mac OS X" in ua:
+        system = "Mac"
+    elif "Linux" in ua:
+        system = "Linux"
+    else:
+        return "Unknown device"
+
+    # Order matters: Edge claims Chrome and Safari, Chrome claims Safari.
+    if "Edg" in ua:
+        browser = "Edge"
+    elif "OPR/" in ua or "Opera" in ua:
+        browser = "Opera"
+    elif "Firefox/" in ua or "FxiOS" in ua:
+        browser = "Firefox"
+    elif "Chrome/" in ua or "CriOS" in ua:
+        browser = "Chrome"
+    elif "Safari/" in ua:
+        browser = "Safari"
+    else:
+        return system
+    return system + " / " + browser
+
+
+def new_session(label: str = "", address: str = "") -> str:
     token = secrets.token_urlsafe(32)
     now = time.time()
     conn = store.connect()
-    conn.execute("INSERT INTO sessions (token, created, expires) VALUES (?,?,?)",
-                 (token, now, now + SESSION_DAYS * 86400))
+    conn.execute("INSERT INTO sessions (token, created, expires, label, address,"
+                 " last_seen) VALUES (?,?,?,?,?,?)",
+                 (token, now, now + SESSION_DAYS * 86400, label[:60], address[:45], now))
     conn.execute("DELETE FROM sessions WHERE expires < ?", (now,))
     conn.commit()
     return token
+
+
+def see_session(token: str | None) -> bool:
+    """Check a session and note that it is still in use.
+
+    The write is throttled: knowing a device was active in the last five
+    minutes is as useful as knowing it to the second, and costs one write an
+    hour instead of one per request.
+    """
+    if not token:
+        return False
+    conn = store.connect()
+    row = conn.execute("SELECT expires, last_seen FROM sessions WHERE token=?",
+                       (token,)).fetchone()
+    now = time.time()
+    if not row or row["expires"] <= now:
+        return False
+    if now - (row["last_seen"] or 0) > TOUCH_EVERY:
+        conn.execute("UPDATE sessions SET last_seen=? WHERE token=?", (now, token))
+        conn.commit()
+    return True
 
 
 def valid_session(token: str | None) -> bool:

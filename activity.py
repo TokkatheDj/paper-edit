@@ -45,14 +45,20 @@ def main() -> int:
     print("  " + "-" * 52)
 
     try:
-        rows = list(c.execute("SELECT created FROM sessions ORDER BY created"))
+        rows = list(c.execute(
+            "SELECT created, last_seen, label, address FROM sessions"
+            " ORDER BY last_seen DESC, created DESC"))
         print(f"  Signed-in devices: {len(rows)}")
         for r in rows:
-            print(f"      signed in   {when(r['created'])}")
+            label = r["label"] or "Unknown device"
+            addr = f" from {r['address']}" if r["address"] else ""
+            print(f"      {label}{addr}")
+            print(f"          signed in {when(r['created'])}")
+            print(f"          last used {when(r['last_seen'])}")
         if not rows:
             print("      nobody is signed in right now")
     except sqlite3.OperationalError:
-        print("  Sign-in is not set up yet.")
+        print("  Sign-in is not set up yet, or predates device labels.")
     print("")
 
     for p in c.execute("SELECT * FROM projects ORDER BY created"):

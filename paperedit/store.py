@@ -70,7 +70,10 @@ CREATE TABLE IF NOT EXISTS auth (
 CREATE TABLE IF NOT EXISTS sessions (
     token       TEXT PRIMARY KEY,
     created     REAL NOT NULL,
-    expires     REAL NOT NULL
+    expires     REAL NOT NULL,
+    label       TEXT DEFAULT '',
+    address     TEXT DEFAULT '',
+    last_seen   REAL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS jobs_project ON jobs(project_id);
 """
@@ -95,21 +98,27 @@ def connect() -> sqlite3.Connection:
 # Columns added after the first release. SQLite has no "ADD COLUMN IF NOT
 # EXISTS", so we add them and shrug off the duplicate error -- simpler and safer
 # than tracking a migration version for a single-user local app.
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS will not
+# add a column to a table that already exists, so every one of these has to be
+# ALTERed in on start-up -- an existing database must never need a hand edit.
 _LATER_COLUMNS = [
-    ("silence_on", "INTEGER DEFAULT 0"),
-    ("silence_keep", "REAL DEFAULT 0.3"),
-    ("silence_min", "REAL DEFAULT 0.6"),
-    ("sound_preset", "TEXT DEFAULT 'auto'"),
-    ("sound_snr", "REAL DEFAULT 0"),
-    ("caption_style", "TEXT DEFAULT 'off'"),
+    ("projects", "silence_on", "INTEGER DEFAULT 0"),
+    ("projects", "silence_keep", "REAL DEFAULT 0.3"),
+    ("projects", "silence_min", "REAL DEFAULT 0.6"),
+    ("projects", "sound_preset", "TEXT DEFAULT 'auto'"),
+    ("projects", "sound_snr", "REAL DEFAULT 0"),
+    ("projects", "caption_style", "TEXT DEFAULT 'off'"),
+    ("sessions", "label", "TEXT DEFAULT ''"),
+    ("sessions", "address", "TEXT DEFAULT ''"),
+    ("sessions", "last_seen", "REAL DEFAULT 0"),
 ]
 
 
 def init() -> None:
     conn = connect()
-    for name, decl in _LATER_COLUMNS:
+    for table, name, decl in _LATER_COLUMNS:
         try:
-            conn.execute(f"ALTER TABLE projects ADD COLUMN {name} {decl}")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
         except sqlite3.OperationalError:
             pass                      # already there
     conn.commit()
