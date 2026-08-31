@@ -25,8 +25,9 @@ def client():
     from paperedit import store
     store.init()
     import server
+    from conftest import sign_in
     with TestClient(server.app) as c:
-        yield c
+        yield sign_in(c)
 
 
 def _wait(client, jid, timeout=600):

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Paper Edit</title>
+<style>
+:root{
+  --bg:#12141a; --panel:#1a1d26; --panel2:#222633; --line:#2e3444;
+  --text:#e8eaf0; --dim:#9aa3b8; --accent:#6ea8ff; --accent2:#2b6fd6; --danger:#ff6b6b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);min-height:100vh;
+  display:flex;align-items:center;justify-content:center;padding:20px;
+  font:15px/1.6 -apple-system,"Segoe UI",Roboto,sans-serif}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:28px;width:100%;max-width:400px}
+h1{font-size:20px;margin:0 0 6px}
+p.sub{color:var(--dim);margin:0 0 20px;font-size:14px}
+label{display:block;font-size:13px;color:var(--dim);margin-bottom:6px}
+input{font:inherit;background:var(--panel2);color:var(--text);width:100%;
+  border:1px solid var(--line);border-radius:8px;padding:11px 12px}
+input:focus{outline:none;border-color:var(--accent)}
+button{font:inherit;width:100%;margin-top:14px;background:var(--accent2);color:#fff;
+  border:1px solid var(--accent2);border-radius:8px;padding:11px 14px;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+.msg{margin-top:14px;font-size:14px;min-height:20px}
+.msg.bad{color:var(--danger)}
+.note{margin-top:18px;padding-top:16px;border-top:1px solid var(--line);
+  color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1 id="title">Paper Edit</h1>
+  <p class="sub" id="sub">Checking&hellip;</p>
+  <form id="form" style="display:none">
+    <label for="pw" id="pwLabel">Password</label>
+    <input type="password" id="pw" autocomplete="current-password" autofocus>
+    <button type="submit" id="go">Sign in</button>
+  </form>
+  <div class="msg" id="msg"></div>
+  <div class="note" id="note" style="display:none"></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+let setup = false;
+
+async function boot() {
+  try {
+    const s = await (await fetch('/api/session')).json();
+    if (s.signed_in) { location.href = '/'; return; }
+    setup = s.needs_setup;
+  } catch (e) {
+    $('#sub').textContent = 'Cannot reach the editor. Is the computer awake?';
+    return;
+  }
+  if (setup) {
+    $('#title').textContent = 'Set a password';
+    $('#sub').textContent = 'Nobody has set one yet. Pick a password to keep the '
+      + 'editor private, and share it with whoever else uses it.';
+    $('#pwLabel').textContent = 'New password';
+    $('#pw').setAttribute('autocomplete', 'new-password');
+    $('#go').textContent = 'Save password';
+    $('#note').style.display = 'block';
+    $('#note').textContent = 'This only keeps other devices on the wifi out. '
+      + 'It is not a bank password, but do not make it "password".';
+  } else {
+    $('#sub').textContent = 'Sign in to get to your recordings.';
+    $('#note').style.display = 'block';
+    $('#note').textContent = 'Signed in for 30 days on this device, so you will '
+      + 'not have to do this every time.';
+  }
+  $('#form').style.display = 'block';
+  $('#pw').focus();
+}
+
+$('#form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const pw = $('#pw').value;
+  $('#go').disabled = true;
+  $('#msg').className = 'msg';
+  $('#msg').textContent = setup ? 'Saving…' : 'Signing in…';
+  try {
+    const r = await fetch('/api/session', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pw})
+    });
+    if (r.ok) { location.href = '/'; return; }
+    const err = await r.json().catch(() => ({}));
+    $('#msg').className = 'msg bad';
+    $('#msg').textContent = err.error || 'That did not work.';
+    $('#pw').select();
+  } catch (e) {
+    $('#msg').className = 'msg bad';
+    $('#msg').textContent = 'Could not reach the editor.';
+  } finally {
+    $('#go').disabled = false;
+  }
+});
+
+boot();
+</script>
+</body>
+</html>

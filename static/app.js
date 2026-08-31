@@ -3,8 +3,13 @@
    The player never re-encodes; it seeks over deleted ranges (see seekPastCuts). */
 
 const $ = s => document.querySelector(s);
+// A 401 means the session lapsed -- most likely the desktop restarted. Go
+// straight to the sign-in page rather than showing a stack of failures.
+const signedOut = () => { location.href = '/login'; };
+
 const api = async (path, opts) => {
   const r = await fetch('/api' + path, opts);
+  if (r.status === 401) { signedOut(); throw new Error('signed out'); }
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
   return r.status === 204 ? null : r.json();
 };
@@ -75,6 +80,8 @@ async function uploadResumable(pid, file, onProgress) {
         const r = await fetch(
           `/api/projects/${pid}/upload?name=${name}&offset=${sent}&final=${final}`,
           {method: 'PUT', body: file.slice(sent, end)});
+        // Retrying a lapsed session just burns the retry budget five times.
+        if (r.status === 401) { signedOut(); throw new Error('signed out'); }
         if (!r.ok) throw new Error('chunk failed');
         sent = (await r.json()).received;
         break;
@@ -472,3 +479,10 @@ async function pushFillers(deleted) {
 
 $('#fillBtn').onclick = () => pushFillers(true);
 $('#fillUndoBtn').onclick = () => pushFillers(false);
+
+/* ----------------------------------------------------------------- sign out */
+
+$('#signOutBtn').onclick = async () => {
+  await api('/session', {method: 'DELETE'}).catch(() => {});
+  location.href = '/login';
+};

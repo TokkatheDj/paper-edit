@@ -53,12 +53,13 @@ python -m venv .venv
 | `paperedit/captions.py` | Animated word-highlight captions as ASS subtitles, burned in at export. |
 | `paperedit/render.py` | ffmpeg export (NVENC), proxy generation, filter-graph builder with audio crossfades at joins. |
 | `cuda_setup.py` | Registers the venv's bundled CUDA DLLs so `device="cuda"` actually works on Windows. |
+| `paperedit/auth.py` | The shared password (scrypt) and server-side sessions. Sign-out revokes; changing the password drops every session. |
 | `paperedit/store.py` | SQLite project, word and job state. On disk, so a nightly shutdown mid-transcription shows as interrupted instead of spinning forever. |
 | `paperedit/transcribe.py` | Word-level transcription; large-v3 on the GPU when it is free, small on CPU otherwise. |
 | `server.py` | FastAPI on :8100 — resumable upload, ingest, edit, export. |
 | `static/` | The editor UI. Plain HTML and JS, no build step. |
 | `spikes/` | The Phase 0 measurements. Each script prints its own numbers. |
-| `tests/` | 30 tests: EDL invariants, the filler-word endpoint against seeded words, and a full upload-to-export run against real media. |
+| `tests/` | 42 tests: EDL invariants, sign-in and session revocation, the filler-word endpoint against seeded words, and a full upload-to-export run against real media. |
 
 ## Next
 
@@ -75,8 +76,14 @@ Still open, roughly in order: clip and shorts detection, real YouTube/Instagram 
 upload, a multitrack timeline, green screen, and local overdub. `ROADMAP.md` has the
 detail, including what is deliberately left out and why.
 
-**There is no authentication.** This is built to run on a home network. Do not expose it
-to the internet as-is.
+**Sign-in.** One shared password for the household, hashed with scrypt, with server-side
+sessions that last 30 days per device and can actually be revoked. The first person to
+open it sets the password; `Set Password.cmd` changes it later and signs every device out.
+
+That is sized for its real threat model -- keeping a guest phone or a kid's tablet on the
+same wifi out of someone's unreleased videos. It is **not** hardening for the open
+internet: there are no accounts, no roles, and it speaks plain http. Run it on a home
+network, not on a forwarded port.
 
 ## License
 

@@ -14,13 +14,13 @@ import time
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from paperedit import store
+from paperedit import auth, store
 from paperedit.audio import detect_silences, silence_gaps, snap_points
 from paperedit.edl import Word, derive_cuts, is_filler
 from paperedit.captions import PRESETS as CAPTION_PRESETS, words_on_output_timeline, write_ass
@@ -209,6 +209,76 @@ def _export(pid: str, jid: str, preset: str) -> None:
     except Exception as e:
         store.update_job(jid, status="failed",
                          message=(type(e).__name__ + ": " + str(e))[:500])
+
+
+# Paths reachable without signing in: the sign-in page itself and the calls it
+# needs. Everything else -- the editor, every API route, the proxy and the
+# finished exports -- is behind the cookie.
+PUBLIC_PATHS = {"/login", "/login.html", "/api/session", "/favicon.ico"}
+
+
+@app.middleware("http")
+async def require_sign_in(request: Request, call_next):
+    path = request.url.path
+    if path in PUBLIC_PATHS or auth.valid_session(request.cookies.get(auth.COOKIE)):
+        return await call_next(request)
+    # An API caller gets a status it can act on; a person gets the sign-in page.
+    if path.startswith("/api/"):
+        return JSONResponse({"error": "not signed in"}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
+
+
+@app.get("/login")
+def login_page():
+    return FileResponse(STATIC / "login.html")
+
+
+@app.get("/api/session")
+def api_session(request: Request):
+    """What the sign-in page needs to know before it draws itself: whether a
+    password exists yet, and whether this browser is already signed in."""
+    return {"signed_in": auth.valid_session(request.cookies.get(auth.COOKIE)),
+            "needs_setup": not auth.has_password()}
+
+
+@app.post("/api/session")
+def api_sign_in(request: Request, body: dict = Body(...)):
+    """Sign in -- or, on a machine where no password has been set yet, set one.
+
+    First-run setup is deliberately open to whoever reaches it first on the home
+    network. The alternative is a password only one of them knows how to
+    create, and an editor the other person simply cannot get into.
+    """
+    who = request.client.host if request.client else "?"
+    wait = auth.locked_out(who)
+    if wait:
+        raise HTTPException(429, f"too many tries -- wait {int(wait) + 1}s")
+
+    password = str(body.get("password", ""))
+    if not auth.has_password():
+        if len(password) < 4:
+            raise HTTPException(400, "pick a password of at least 4 characters")
+        auth.set_password(password)
+    elif not auth.check_password(password):
+        auth.note_failure(who)
+        raise HTTPException(401, "that is not the password")
+
+    auth.clear_failures(who)
+    token = auth.new_session()
+    r = JSONResponse({"ok": True})
+    # Not Secure: this is plain http on a home LAN, and a Secure cookie would
+    # simply never be sent. Lax keeps it off cross-site requests.
+    r.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400,
+                 httponly=True, samesite="lax", path="/")
+    return r
+
+
+@app.delete("/api/session")
+def api_sign_out(request: Request):
+    auth.end_session(request.cookies.get(auth.COOKIE))
+    r = JSONResponse({"ok": True})
+    r.delete_cookie(auth.COOKIE, path="/")
+    return r
 
 
 @app.get("/api/health")

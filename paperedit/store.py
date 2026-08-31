@@ -61,6 +61,17 @@ CREATE TABLE IF NOT EXISTS jobs (
     created     REAL NOT NULL,
     updated     REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS auth (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    salt        BLOB NOT NULL,
+    hash        BLOB NOT NULL,
+    created     REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token       TEXT PRIMARY KEY,
+    created     REAL NOT NULL,
+    expires     REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS jobs_project ON jobs(project_id);
 """
 
