@@ -35,6 +35,10 @@ nothing is re-encoded until you press Export.
 
 **The host machine has to be awake.** The editor is only there while the server is running.
 
+If you have handed the editor to someone else, **`Editor Activity.cmd`** answers the
+question you actually have afterwards: has it been opened, has anything been cut, and
+did any export fail without anyone mentioning it. It only reads the database.
+
 ## Disk space
 
 Everything for a project lives in `projects/<project id>/`, and nothing in the app ever
@@ -81,6 +85,7 @@ python -m venv .venv
 | `paperedit/transcribe.py` | Word-level transcription; large-v3 on the GPU when it is free, small on CPU otherwise. |
 | `server.py` | FastAPI on :8100 — resumable upload, ingest, edit, export. |
 | `static/` | The editor UI. Plain HTML and JS, no build step. |
+| `activity.py` | `Editor Activity.cmd` -- did it get used, and did anything fail quietly? Read-only. |
 | `spikes/` | The Phase 0 measurements. Each script prints its own numbers. |
 | `tests/` | 42 tests: EDL invariants, sign-in and session revocation, the filler-word endpoint against seeded words, and a full upload-to-export run against real media. |
 
