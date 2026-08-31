@@ -146,6 +146,10 @@ async function openProject(pid) {
   const fresh = await api('/projects/' + pid);
   $('#jobCard').classList.toggle('hide', fresh.status === 'ready');
   $('#sOrig').textContent = fmt(fresh.duration);
+  // Blank the edit stats until this project's plan arrives. The first open of a
+  // project runs a full silence scan, and for those seconds the panel would
+  // otherwise still be showing the last project's numbers.
+  $('#sEdit').textContent = $('#sCut').textContent = $('#sSeg').textContent = '-';
   if (fresh.status === 'failed') {
     $('#jobMsg').textContent = 'Failed: ' + (fresh.job ? fresh.job.message : '');
     return;
