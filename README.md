@@ -35,6 +35,29 @@ nothing is re-encoded until you press Export.
 
 **The host machine has to be awake.** The editor is only there while the server is running.
 
+## Disk space
+
+Everything for a project lives in `projects/<project id>/`, and nothing in the app ever
+deletes anything. That is deliberate -- losing someone's footage to an automatic cleanup
+is unforgivable -- but it does mean exports accumulate quietly:
+
+| file | what it is | safe to delete? |
+|---|---|---|
+| `source.*` | your original, copied here on upload | **no** -- exporting needs it |
+| `proxy.mp4` | the 720p copy the editor plays | no -- without it there is no preview |
+| `export-*.mp4` | finished renders, one per export | **yes, any time** |
+| `captions.ass` | subtitles for the last export | yes -- rewritten at every export |
+| `silences.json` | cached silence scan | yes -- recomputed on demand (slow first time) |
+
+Every export writes a **new** timestamped file rather than overwriting the last one, so a
+few passes at a long video add up fast: six exports of one 10-minute 1080p60 recording
+came to just over 5 GB. Deleting `export-*.mp4` is always safe -- they are derived from the
+source and the cut list, and re-exporting reproduces them.
+
+Captions are never cached on purpose. Their timings are relative to the *edited* timeline,
+so a `.ass` left over from a previous export would drift out of sync the moment anything
+was edited.
+
 ## Setup
 
 ```bash
