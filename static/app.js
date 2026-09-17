@@ -295,20 +295,64 @@ function inKeptRange(t) {
   return state.plan.cuts.some(c => t >= c.start && t < c.end);
 }
 
-video.addEventListener('timeupdate', () => {
+/* THE SKIP IS CHECKED EVERY FRAME, NOT EVERY timeupdate.
+
+   timeupdate fires about four times a second. That was fine for the
+   highlight, but it was the whole of the skip logic, and it meant two things.
+   The playhead could sit inside a removed range for up to a quarter of a
+   second before jumping -- and worse, if the removed range was SHORTER than
+   the gap between two events, no event ever landed inside it, so the words
+   played in full and were never skipped at all. The words most worth cutting
+   ("um", "so", "a", "the") run 150-300ms, which is exactly that hole.
+
+   From the first real edit, 7 Sep 2026: "Words are cross out, but not
+   being edited out from the companion video."
+
+   A rAF loop is used rather than requestVideoFrameCallback because rVFC only
+   fires when a video frame is presented, and this editor is meant for podcasts
+   too -- on an audio-only project it would never fire at all, which would be
+   the same bug again and harder to see. timeupdate is KEPT as a backstop: rAF
+   is throttled in a background tab, and audio keeps playing there. */
+function applySkip() {
   const t = video.currentTime;
-  if (!inKeptRange(t)) {
-    const nxt = nextCutStart(t);
-    if (nxt == null) { video.pause(); return; }
-    video.currentTime = nxt;
+  if (inKeptRange(t)) {
+    skipTarget = null;
+    highlightWord(t);
     return;
   }
-  highlightWord(t);
-});
+  const nxt = nextCutStart(t);
+  if (nxt == null) { video.pause(); skipTarget = null; return; }
+  // A seek takes many frames to land. Without this we would re-issue the same
+  // jump sixty times a second and thrash the decoder.
+  if (skipTarget !== nxt) { skipTarget = nxt; video.currentTime = nxt; }
+}
+
+let skipTarget = null;
+let frameLoop = null;
+
+function pumpFrames() {
+  if (video.paused || video.ended) { frameLoop = null; return; }
+  applySkip();
+  frameLoop = requestAnimationFrame(pumpFrames);
+}
+
+function startPump() {
+  if (frameLoop == null) frameLoop = requestAnimationFrame(pumpFrames);
+}
+
+video.addEventListener('play', startPump);
+video.addEventListener('playing', startPump);
+video.addEventListener('seeked', applySkip);
+video.addEventListener('timeupdate', applySkip);
 
 let lastWordEl = null;
+let curWord = null;
 function highlightWord(t) {
+  // Sixty times a second over 1,400 words, a linear scan every frame is real
+  // work for nothing: the answer only changes when a word boundary passes.
+  if (curWord && !curWord.deleted && t >= curWord.start && t < curWord.end) return;
   const w = state.words.find(x => !x.deleted && t >= x.start && t < x.end);
+  curWord = w || null;
   if (!w) return;
   const el = document.querySelector(`#transcript .w[data-idx="${w.idx}"]`);
   if (el === lastWordEl) return;
