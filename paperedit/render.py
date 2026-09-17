@@ -30,6 +30,9 @@ AUDIO_XFADE = 0.02  # 20 ms; hides the sample discontinuity at a join
 # video in a way that does not look right. It needs to blend the parts that are
 # left to connect after words or sentences were removed."
 VIDEO_XFADE = 0.10
+# Below this, the whole export falls back to hard cuts. See build_filtergraph.
+# One frame at 24 fps, so it is at least a frame at every common recording rate.
+MIN_VIDEO_DISSOLVE = 1 / 24
 
 
 def ffprobe(path: str | Path) -> dict:
@@ -115,7 +118,22 @@ def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE
     n = len(plan.cuts)
     dissolves = (video_dissolves(plan, vxfade)
                  if video and n > 1 and vxfade > 0 else [])
-    blending = any(d > 0 for d in dissolves)
+    # ONE SHORT JOIN AND THE WHOLE PICTURE GOES HARD-CUT. An xfade narrower
+    # than a frame does not fail -- it quietly ends the video stream, and
+    # ffmpeg exits 0 with the picture stopping up to 23 seconds before the
+    # sound. Measured 16 Sep 2026 against a 6 ms kept sliver and a 0.03 ms gap
+    # (which prints as duration=0.0000); the hard-cut path handled both within
+    # a frame. Silence removal makes both shapes reachable: it is subtracted
+    # AFTER the cuts are put on the frame grid, so it can leave a fragment
+    # shorter than a frame.
+    #
+    # Falling back for the whole export rather than per join keeps this one
+    # branch instead of a mixed concat/xfade graph. A correct video without
+    # fades beats a broken one with them, and real edits have not come
+    # near it: a measured 97-cut edit's shortest dissolve was 75 ms.
+    if dissolves and min(dissolves) < MIN_VIDEO_DISSOLVE:
+        dissolves = []
+    blending = bool(dissolves)
     for i, c in enumerate(plan.cuts):
         dur = c.duration
         fade = min(xfade, dur / 4) if dur > 0 else 0
