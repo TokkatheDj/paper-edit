@@ -21,6 +21,15 @@ from .edl import EditPlan
 BS = chr(92)
 SEP_CHAIN = chr(59) + chr(10)   # ";" newline -- ffmpeg filterchain separator
 AUDIO_XFADE = 0.02  # 20 ms; hides the sample discontinuity at a join
+# 100 ms; hides the JUMP in the picture at a join. Audio was already smoothed
+# and the cuts are already snapped to silence, so what was left to fix was
+# purely visual: the speaker's head and hands are in a different position either side of
+# a cut, and the picture snapped between them.
+#
+# From the first real edit, 7 Sep 2026: "there is an unnatural/inorganic flow that breaks the
+# video in a way that does not look right. It needs to blend the parts that are
+# left to connect after words or sentences were removed."
+VIDEO_XFADE = 0.10
 
 
 def ffprobe(path: str | Path) -> dict:
@@ -69,17 +78,53 @@ def escape_filter_path(path: str | Path) -> str:
     return str(path).replace(BS, '/').replace(':', BS + ':')
 
 
+def video_dissolves(plan: EditPlan, vxfade: float = VIDEO_XFADE) -> list[float]:
+    """How long to dissolve at each join -- one entry per gap between cuts.
+
+    THE DISSOLVE IS TAKEN FROM THE MATERIAL BEING THROWN AWAY. Segment i's
+    picture is extended past its cut point INTO the deleted range, and that
+    extension is what segment i+1 fades up through. Neither segment's kept
+    content is shortened, so the output is exactly as long as a hard cut would
+    have been.
+
+    That matters more than it looks. A plain xfade overlaps two clips and so
+    eats its own duration at every join -- 28 deletions would have made the
+    export 2.8 seconds shorter than the plan says. Caption timings are computed
+    against the EDITED timeline, so every subtitle after the first cut would
+    have drifted, and the drift would have grown with each join.
+
+    Clamped to the gap (we cannot borrow more than was deleted) and to half of
+    each neighbouring segment (a dissolve cannot be longer than the shot).
+    """
+    cuts = plan.cuts
+    out = []
+    for i in range(len(cuts) - 1):
+        gap = cuts[i + 1].start - cuts[i].end
+        out.append(max(0.0, min(vxfade, gap,
+                                cuts[i].duration / 2, cuts[i + 1].duration / 2)))
+    return out
+
+
 def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE,
-                      audio_filters: str = "", video_filters: str = "") -> str:
+                      audio_filters: str = "", video_filters: str = "",
+                      vxfade: float = VIDEO_XFADE) -> str:
     """trim each surviving range, then concat. Audio gets a short fade at each
-    join so a cut through a waveform doesn't click."""
+    join so a cut through a waveform doesn't click, and the picture gets a
+    short dissolve so it doesn't jump."""
     parts, vlabels, alabels = [], [], []
+    n = len(plan.cuts)
+    dissolves = (video_dissolves(plan, vxfade)
+                 if video and n > 1 and vxfade > 0 else [])
+    blending = any(d > 0 for d in dissolves)
     for i, c in enumerate(plan.cuts):
         dur = c.duration
         fade = min(xfade, dur / 4) if dur > 0 else 0
         if video:
+            # Reaches PAST the cut, into the deleted material, so the next
+            # segment has something to dissolve through.
+            v_end = c.end + (dissolves[i] if i < len(dissolves) else 0.0)
             parts.append(
-                f"[0:v]trim=start={c.start:.4f}:end={c.end:.4f},"
+                f"[0:v]trim=start={c.start:.4f}:end={v_end:.4f},"
                 f"setpts=PTS-STARTPTS[v{i}];")
             vlabels.append(f"[v{i}]")
         parts.append(
@@ -89,7 +134,6 @@ def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE
             f"afade=t=out:st={max(0.0, dur - fade):.4f}:d={fade:.4f}[a{i}];")
         alabels.append(f"[a{i}]")
 
-    n = len(plan.cuts)
     # Studio Sound runs AFTER the concat, on the finished edit: loudness must
     # be measured across what the listener actually hears, not per fragment.
     tail = "acat" if audio_filters else "aout"
@@ -98,7 +142,23 @@ def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE
     # A separator is needed whenever ANY chain follows the concat, not just
     # an audio one -- captions alone would otherwise produce a broken graph.
     sep = ";" if (audio_filters or (video and video_filters)) else ""
-    if video:
+    if blending:
+        # Video and audio are assembled separately here: the picture is a chain
+        # of xfades, the sound stays a plain concat of the exact trims. Both
+        # come out the same length -- see video_dissolves -- so they stay in
+        # sync without the audio ever being stretched or overlapped twice.
+        run = plan.cuts[0].duration + dissolves[0]
+        cur = vlabels[0]
+        for i in range(1, n):
+            d = dissolves[i - 1]
+            out = f"[vx{i}]" if i < n - 1 else f"[{vtail}]"
+            parts.append(f"{cur}{vlabels[i]}xfade=transition=fade:"
+                         f"duration={d:.4f}:offset={run - d:.4f}{out};")
+            run += plan.cuts[i].duration + (dissolves[i] if i < len(dissolves)
+                                            else 0.0) - d
+            cur = out
+        parts.append("".join(alabels) + f"concat=n={n}:v=0:a=1[{tail}]{sep}")
+    elif video:
         parts.append("".join(f"{v}{a}" for v, a in zip(vlabels, alabels))
                      + f"concat=n={n}:v=1:a=1[{vtail}][{tail}]{sep}")
     else:
