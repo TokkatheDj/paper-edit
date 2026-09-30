@@ -7,6 +7,21 @@ cutting requires re-encoding, so we do that, on NVENC where available.
 The filter graph is written to a SCRIPT FILE, not the command line -- a two-hour
 podcast with filler removal can reach thousands of cuts and blow the Windows
 32k command-line limit.
+
+EACH CUT READS ITS OWN SEEKED INPUT when the command line allows it. With one
+input, every cut's trim branch is fed the source from the very beginning up to
+where that cut ends, and throws the early frames away -- so the work is
+(number of cuts x length of the video). A real 97-cut, 9-minute edit took about
+half an hour that way (measured 30 Sep 2026: 40 cuts over one minute, 72.5 s
+with one input vs 6.8 s seeked). An input opened with -ss decodes only its own
+span. Past the command-line limit it falls back to the single input.
+
+Every seeked input is a decoder of its own, all open at once, and they decode
+ahead into memory: about 87 MB per cut even with one decoder thread each (24
+cuts 2.2 GB, 48 cuts 4.2 GB, 97 cuts 8.4 GB). With ffmpeg's default threads
+per decoder the 97-cut edit ran out of memory. So each input gets -threads 1,
+and past MAX_SEEKED_INPUTS the export takes the single-input path (about
+3.4 GB, slower) instead.
 """
 from __future__ import annotations
 
@@ -108,16 +123,30 @@ def video_dissolves(plan: EditPlan, vxfade: float = VIDEO_XFADE) -> list[float]:
     return out
 
 
-def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE,
-                      audio_filters: str = "", video_filters: str = "",
-                      vxfade: float = VIDEO_XFADE) -> str:
-    """trim each surviving range, then concat. Audio gets a short fade at each
-    join so a cut through a waveform doesn't click, and the picture gets a
-    short dissolve so it doesn't jump."""
-    parts, vlabels, alabels = [], [], []
+def join_dissolves(plan: EditPlan, *, video: bool,
+                   vxfade: float = VIDEO_XFADE) -> list[float]:
+    """The dissolves the export will actually use: video_dissolves, or none at
+    all when any join is too short to blend (see build_filtergraph)."""
     n = len(plan.cuts)
     dissolves = (video_dissolves(plan, vxfade)
                  if video and n > 1 and vxfade > 0 else [])
+    if dissolves and min(dissolves) < MIN_VIDEO_DISSOLVE:
+        return []
+    return dissolves
+
+
+def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE,
+                      audio_filters: str = "", video_filters: str = "",
+                      vxfade: float = VIDEO_XFADE, seeked: bool = False) -> str:
+    """trim each surviving range, then concat. Audio gets a short fade at each
+    join so a cut through a waveform doesn't click, and the picture gets a
+    short dissolve so it doesn't jump.
+
+    `seeked=True` expects one input per cut, opened at that cut's start (see
+    seek_inputs), so each trim is relative to its own input and starts at 0."""
+    parts, vlabels, alabels = [], [], []
+    n = len(plan.cuts)
+    dissolves = join_dissolves(plan, video=video, vxfade=vxfade)
     # ONE SHORT JOIN AND THE WHOLE PICTURE GOES HARD-CUT. An xfade narrower
     # than a frame does not fail -- it quietly ends the video stream, and
     # ffmpeg exits 0 with the picture stopping up to 23 seconds before the
@@ -131,8 +160,6 @@ def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE
     # branch instead of a mixed concat/xfade graph. A correct video without
     # fades beats a broken one with them, and real edits have not come
     # near it: a measured 97-cut edit's shortest dissolve was 75 ms.
-    if dissolves and min(dissolves) < MIN_VIDEO_DISSOLVE:
-        dissolves = []
     blending = bool(dissolves)
     for i, c in enumerate(plan.cuts):
         dur = c.duration
@@ -141,12 +168,16 @@ def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE
             # Reaches PAST the cut, into the deleted material, so the next
             # segment has something to dissolve through.
             v_end = c.end + (dissolves[i] if i < len(dissolves) else 0.0)
+            v_in, v_from, v_to = ((f"[{i}:v]", 0.0, v_end - c.start) if seeked
+                                  else ("[0:v]", c.start, v_end))
             parts.append(
-                f"[0:v]trim=start={c.start:.4f}:end={v_end:.4f},"
+                f"{v_in}trim=start={v_from:.4f}:end={v_to:.4f},"
                 f"setpts=PTS-STARTPTS[v{i}];")
             vlabels.append(f"[v{i}]")
+        a_in, a_from, a_to = ((f"[{i}:a]", 0.0, dur) if seeked
+                              else ("[0:a]", c.start, c.end))
         parts.append(
-            f"[0:a]atrim=start={c.start:.4f}:end={c.end:.4f},"
+            f"{a_in}atrim=start={a_from:.4f}:end={a_to:.4f},"
             f"asetpts=PTS-STARTPTS,"
             f"afade=t=in:st=0:d={fade:.4f},"
             f"afade=t=out:st={max(0.0, dur - fade):.4f}:d={fade:.4f}[a{i}];")
@@ -191,6 +222,39 @@ def build_filtergraph(plan: EditPlan, *, video: bool, xfade: float = AUDIO_XFADE
     return "\n".join(parts)
 
 
+# Windows refuses command lines over 32,767 characters. Leave room for the
+# encoder options and the output path that follow the inputs.
+MAX_INPUT_ARGS_CHARS = 30_000
+# About 87 MB each (see the module docstring): 150 inputs is roughly 13 GB.
+MAX_SEEKED_INPUTS = 150
+
+
+def seek_inputs(source: str | Path, plan: EditPlan,
+                dissolves: list[float]) -> list[str]:
+    """One -ss/-t input per cut: it starts at the cut and runs to the end of
+    what that cut needs (its dissolve tail included), plus a little slack --
+    the trims in the graph set the exact ends."""
+    args: list[str] = []
+    for i, c in enumerate(plan.cuts):
+        end = c.end + (dissolves[i] if i < len(dissolves) else 0.0)
+        args += ["-threads", "1",
+                 "-ss", f"{c.start:.4f}", "-t", f"{end - c.start + 0.1:.4f}",
+                 "-i", str(source)]
+    return args
+
+
+def choose_inputs(source: str | Path, plan: EditPlan, *,
+                  video: bool) -> tuple[list[str], bool]:
+    """(ffmpeg input args, seeked?) -- one seeked input per cut when there are
+    few enough to hold in memory and to fit on the command line, otherwise the
+    whole file once."""
+    inputs = seek_inputs(source, plan, join_dissolves(plan, video=video))
+    if (1 < len(plan.cuts) <= MAX_SEEKED_INPUTS
+            and len(" ".join(inputs)) <= MAX_INPUT_ARGS_CHARS):
+        return inputs, True
+    return ["-i", str(source)], False
+
+
 def render(source: str | Path, plan: EditPlan, out_path: str | Path, *,
            gpu: bool | None = None, crf: int = 20, extra: list[str] | None = None,
            audio_filters: str = "", video_filters: str = "",
@@ -210,16 +274,17 @@ def render(source: str | Path, plan: EditPlan, out_path: str | Path, *,
     info = media_info(source)
     want_video = info["has_video"] and video is not False
     use_gpu = has_nvenc() if gpu is None else gpu
+    inputs, seeked = choose_inputs(source, plan, video=want_video)
     graph = build_filtergraph(plan, video=want_video,
                               audio_filters=audio_filters,
-                              video_filters=video_filters)
+                              video_filters=video_filters, seeked=seeked)
 
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as fh:
         fh.write(graph)
         script = fh.name
 
-    cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(source),
+    cmd = ["ffmpeg", "-y", "-v", "error", *inputs,
            "-filter_complex_script", script]
     if want_video:
         cmd += ["-map", "[vout]"]
