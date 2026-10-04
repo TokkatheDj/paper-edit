@@ -1,5 +1,7 @@
 # Paper Edit
 
+[![Tests](https://github.com/TokkatheDj/paper-edit/actions/workflows/tests.yml/badge.svg)](https://github.com/TokkatheDj/paper-edit/actions/workflows/tests.yml)
+
 A local, text-based video editor — edit long-form video and podcasts by editing the
 transcript. Everything runs on your own machine: no cloud, no subscription, no account.
 

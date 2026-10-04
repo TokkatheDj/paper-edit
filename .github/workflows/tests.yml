@@ -1,0 +1,25 @@
+name: Tests
+
+# The test suite on every push and pull request. The full upload-to-export tests need a sample
+# video (built by spikes/cut_quality.py) and skip themselves without it, so CI runs the rest:
+# the edit-list maths, sign-in and sessions, filler removal, dissolves and the seeked export.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      # Everything in requirements.txt except the GPU-only CUDA libraries (large, and unused here).
+      - run: grep -v '^nvidia-' requirements.txt > ci-requirements.txt
+      - run: pip install -r ci-requirements.txt
+      - run: python -m pytest tests/ -q

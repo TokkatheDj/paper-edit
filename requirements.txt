@@ -1,5 +1,8 @@
 faster-whisper==1.2.1      # transcription; pulls ctranslate2 + onnxruntime
 numpy                      # click/level analysis
+fastapi                    # the web server and its API
+uvicorn                    # serves it
+httpx                      # FastAPI's test client (tests)
 pytest                     # EDL tests
 
 # GPU only. Ships the cublas/cudnn DLLs ctranslate2 loads by name; without these
