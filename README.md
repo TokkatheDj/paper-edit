@@ -87,7 +87,7 @@ python -m venv .venv
 | `static/` | The editor UI. Plain HTML and JS, no build step. |
 | `activity.py` | `Editor Activity.cmd` -- did it get used, and did anything fail quietly? Lists signed-in devices by label. Read-only. |
 | `spikes/` | The Phase 0 measurements. Each script prints its own numbers. |
-| `tests/` | 42 tests: EDL invariants, sign-in and session revocation, the filler-word endpoint against seeded words, and a full upload-to-export run against real media. |
+| `tests/` | 67 tests: EDL invariants, sign-in, session revocation and login throttling, the filler-word endpoint, platform export presets (YouTube, Reels, square, audio-only), dissolves at the joins, the fast per-cut seeked export, and a full upload-to-export run against real media. |
 
 ## Next
 
