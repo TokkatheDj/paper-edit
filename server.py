@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from paperedit import auth, store
+from paperedit import auth, clips, store
 from paperedit.audio import detect_silences, silence_gaps, snap_points
 from paperedit.edl import Word, derive_cuts, is_filler
 from paperedit.captions import PRESETS as CAPTION_PRESETS, words_on_output_timeline, write_ass
@@ -206,6 +206,29 @@ def _export(pid: str, jid: str, preset: str) -> None:
         actual = media_info(out)["duration"]
         store.update_job(jid, status="done", progress=1.0, result=out.name,
                          message=f"{actual/60:.1f} min from {len(plan.cuts)} cuts")
+    except Exception as e:
+        store.update_job(jid, status="failed",
+                         message=(type(e).__name__ + ": " + str(e))[:500])
+
+
+def _find_clips(pid: str, jid: str, n: int) -> None:
+    """Ask the local LLM for short-worthy moments. Tens of seconds on a 12B
+    model, so it is a job like export rather than a request that hangs."""
+    try:
+        store.update_job(jid, status="running", progress=0.05, message="reading the transcript")
+
+        def prog(frac: float, msg: str) -> None:
+            store.update_job(jid, progress=0.1 + 0.8 * frac, message=msg)
+
+        out = clips.find_clips(store.get_words(pid), n=n, progress=prog)
+        found = len(out["clips"])
+        msg = f"{found} clip{'s' if found != 1 else ''} found"
+        if out.get("note"):
+            msg += " -- " + out["note"]
+        store.update_job(jid, status="done", progress=1.0, message=msg,
+                         result=json.dumps(out))
+    except clips.ClipsError as e:
+        store.update_job(jid, status="failed", message=str(e)[:500])
     except Exception as e:
         store.update_job(jid, status="failed",
                          message=(type(e).__name__ + ": " + str(e))[:500])
@@ -481,6 +504,38 @@ def api_export(pid: str, body: dict = Body(default={})):
     jid = store.create_job(pid, "export")
     store.run_in_background(_export, pid, jid, preset)
     return {"job": jid}
+
+
+@app.post("/api/projects/{pid}/clips")
+def api_find_clips(pid: str, body: dict = Body(default={})):
+    """Start looking for clips. Poll /api/jobs/{job}, then GET this path."""
+    p = _project_or_404(pid)
+    if p["status"] != "ready":
+        raise HTTPException(400, "the transcript is not ready yet")
+    try:
+        n = max(1, min(10, int(body.get("count", 3))))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "count must be a number")
+    jid = store.create_job(pid, "clips")
+    store.run_in_background(_find_clips, pid, jid, n)
+    return {"job": jid}
+
+
+@app.get("/api/projects/{pid}/clips")
+def api_clips(pid: str):
+    """The latest clip suggestions, so they survive closing the project.
+
+    They were found against the transcript as it was then; an edit made since
+    does not move them.
+    """
+    _project_or_404(pid)
+    j = store.latest_job(pid, "clips")
+    out = {"job": j, "clips": [], "dropped": []}
+    if j and j["status"] == "done" and j["result"]:
+        found = json.loads(j["result"])
+        out.update(clips=found.get("clips", []), dropped=found.get("dropped", []),
+                   model=found.get("model"), note=found.get("note", ""))
+    return out
 
 
 @app.get("/api/jobs/{jid}")

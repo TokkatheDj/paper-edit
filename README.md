@@ -83,13 +83,14 @@ python -m venv .venv
 | `paperedit/render.py` | ffmpeg export (NVENC), proxy generation, filter-graph builder with audio crossfades at joins. |
 | `cuda_setup.py` | Registers the venv's bundled CUDA DLLs so `device="cuda"` actually works on Windows. |
 | `paperedit/auth.py` | The shared password (scrypt) and server-side sessions. Sign-out revokes; changing the password drops every session. |
+| `paperedit/clips.py` | Clip suggestions (round 1). A local LLM via Ollama proposes 30-60 s moments; code snaps them to word and sentence boundaries, fits the length, and drops overlaps and deleted text. |
 | `paperedit/store.py` | SQLite project, word and job state. On disk, so a nightly shutdown mid-transcription shows as interrupted instead of spinning forever. |
 | `paperedit/transcribe.py` | Word-level transcription; large-v3 on the GPU when it is free, small on CPU otherwise. |
 | `server.py` | FastAPI on :8100 — resumable upload, ingest, edit, export. |
 | `static/` | The editor UI. Plain HTML and JS, no build step. |
 | `activity.py` | `Editor Activity.cmd` -- did it get used, and did anything fail quietly? Lists signed-in devices by label. Read-only. |
 | `spikes/` | The Phase 0 measurements. Each script prints its own numbers. |
-| `tests/` | 67 tests: EDL invariants, sign-in, session revocation and login throttling, the filler-word endpoint, platform export presets (YouTube, Reels, square, audio-only), dissolves at the joins, the fast per-cut seeked export, and a full upload-to-export run against real media. |
+| `tests/` | 105 tests: EDL invariants, sign-in, session revocation and login throttling, the filler-word endpoint, platform export presets (YouTube, Reels, square, audio-only), dissolves at the joins, the fast per-cut seeked export, clip-suggestion repair and its endpoint (with the model faked), and a full upload-to-export run against real media. |
 
 ## Next
 
@@ -102,8 +103,20 @@ readable text and tidies most of them away, and no model size or filler-primed p
 fixes it. So the filler button removes the ones the transcript spells out and says so;
 the pauses the rest leave behind are what dead-air removal is for.
 
-Still open, roughly in order: clip and shorts detection, real YouTube/Instagram API
-upload, a multitrack timeline, green screen, and local overdub. `ROADMAP.md` has the
+**Clip suggestions (round 1).** *Find clips* asks a local model through Ollama
+(`gemma3:12b` by default; `PAPEREDIT_CLIP_MODEL` and `PAPEREDIT_OLLAMA_URL` change it)
+for three 30-60 s moments and lists them with a Play button. The model's times are only
+hints: every clip is re-snapped and re-fitted in code. On four real 7-10 minute talks, 17 of
+the 24 clips two models proposed needed repair -- most often lengthening, since 10 of them
+ran under 30 s -- and all 24 came out 30-60 s. A run takes 11-25 s with `gemma3:12b` (about
+12 s of that is loading the model the first time). The honest limit: Whisper writes few
+full stops, so about one clip end in five lands on a plain word boundary because no
+sentence, comma or pause fits the length; each clip says which it landed on. The
+suggestions are made against the transcript as it was when you asked. There is no shorts
+export yet -- that is round 2.
+
+Still open, roughly in order: vertical shorts export for the suggested clips, real
+YouTube/Instagram API upload, a multitrack timeline, green screen, and local overdub. `ROADMAP.md` has the
 detail, including what is deliberately left out and why.
 
 **Sign-in.** One shared password for the household, hashed with scrypt, with server-side

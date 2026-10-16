@@ -143,7 +143,8 @@ async function openProject(pid) {
   const p = await api('/projects/' + pid);
   $('#sOrig').textContent = fmt(p.duration);
 
-  if (p.job && ['queued', 'running'].includes(p.job.status)) {
+  // A clip search running in the background is no reason to hold the editor.
+  if (p.job && p.job.kind !== 'clips' && ['queued', 'running'].includes(p.job.status)) {
     $('#jobCard').classList.remove('hide');
     await pollJob(p.job.id, j => {
       $('#jobMsg').textContent = j.message || j.status;
@@ -181,9 +182,11 @@ async function openProject(pid) {
   state.words = await api(`/projects/${pid}/words`);
   renderTranscript();
   await refreshPlan();
+  loadClips();
 }
 
 $('#backBtn').onclick = () => {
+  clipStop = null;
   $('#player').pause(); $('#player').removeAttribute('src');
   $('#editView').classList.add('hide');
   $('#backBtn').classList.add('hide');
@@ -227,6 +230,7 @@ $('#transcript').addEventListener('pointerup', e => {
   const el = e.target.closest('.w');
   if (el && !wasDrag) {                       // a plain click means "play here"
     const w = state.words[+el.dataset.idx];
+    clipStop = null;                          // and keep playing past any clip end
     if (w) seekSource(w.start);
   }
 });
@@ -315,6 +319,12 @@ function inKeptRange(t) {
    is throttled in a background tab, and audio keeps playing there. */
 function applySkip() {
   const t = video.currentTime;
+  if (clipStop) {
+    // Playing a suggested clip: stop at its end. Scrubbing away from it with
+    // the player's own controls ends clip mode rather than stopping later.
+    if (t >= clipStop.end) { video.pause(); clipStop = null; return; }
+    if (t < clipStop.start - 1) clipStop = null;
+  }
   if (inKeptRange(t)) {
     skipTarget = null;
     highlightWord(t);
@@ -329,6 +339,7 @@ function applySkip() {
 
 let skipTarget = null;
 let frameLoop = null;
+let clipStop = null;      // {start, end} while a suggested clip is playing
 
 function pumpFrames() {
   if (video.paused || video.ended) { frameLoop = null; return; }
@@ -523,6 +534,86 @@ async function pushFillers(deleted) {
 
 $('#fillBtn').onclick = () => pushFillers(true);
 $('#fillUndoBtn').onclick = () => pushFillers(false);
+
+/* ------------------------------------------------------------ clips for shorts
+
+   A local LLM proposes moments; the server snaps them to word and sentence
+   boundaries and fits them to 30-60 s before they reach this list. Play seeks
+   the ordinary preview, so deleted words inside a clip are skipped as usual.
+   Everything here is model or transcript text, so it goes in as textContent. */
+
+const CLIP_DEFAULT = $('#clipInfo').textContent;
+
+function renderClips(r) {
+  const box = $('#clipList');
+  box.innerHTML = '';
+  for (const c of r.clips) {
+    const el = document.createElement('div');
+    el.className = 'clip';
+    const head = document.createElement('div');
+    head.className = 'row';
+    const title = document.createElement('b');
+    title.style.flex = '1';
+    title.textContent = c.title;
+    const play = document.createElement('button');
+    play.className = 'small';
+    play.textContent = 'Play';
+    play.onclick = () => {
+      clipStop = {start: c.start, end: c.end};
+      seekSource(c.start);
+    };
+    head.append(title, play);
+    const when = document.createElement('div');
+    when.className = 'small dim';
+    when.textContent = `${fmt(c.start)}-${fmt(c.end)} · ${Math.round(c.duration)} s`;
+    const why = document.createElement('p');
+    why.className = 'small';
+    why.textContent = c.reason;
+    const said = document.createElement('p');
+    said.className = 'small dim';
+    said.textContent = '"' + c.excerpt + '"';
+    el.append(head, when, why, said);
+    box.appendChild(el);
+  }
+}
+
+async function loadClips() {
+  const pid = state.pid;
+  const r = await api(`/projects/${pid}/clips`).catch(() => null);
+  if (!r || pid !== state.pid) return;
+  renderClips(r);
+  const j = r.job;
+  if (!j) { $('#clipInfo').textContent = CLIP_DEFAULT; return; }
+  if (['queued', 'running'].includes(j.status)) { watchClips(j.id); return; }
+  $('#clipInfo').textContent = j.status === 'done'
+    ? (r.clips.length ? 'Found against the transcript as it was then.' : j.message)
+    : 'Last try failed: ' + j.message;
+}
+
+async function watchClips(jid) {
+  const pid = state.pid;
+  $('#clipBtn').disabled = true;
+  try {
+    const done = await pollJob(jid, j => {
+      if (pid === state.pid) $('#clipInfo').textContent = j.message || j.status;
+    });
+    if (pid !== state.pid) return;
+    if (done.status !== 'done') toast('Find clips: ' + done.message);
+    await loadClips();
+  } finally {
+    $('#clipBtn').disabled = false;
+  }
+}
+
+$('#clipBtn').onclick = async () => {
+  $('#clipList').innerHTML = '';
+  try {
+    const {job} = await jpost(`/projects/${state.pid}/clips`, {count: 3});
+    await watchClips(job);
+  } catch (e) {
+    toast('Find clips: ' + e.message);
+  }
+};
 
 /* ----------------------------------------------------------------- sign out */
 

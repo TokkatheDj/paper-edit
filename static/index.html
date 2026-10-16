@@ -67,6 +67,8 @@ a.dl{display:block;padding:10px;margin-top:8px;background:var(--panel2);
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:20;
   background:var(--panel2);border:1px solid var(--line);border-radius:10px;
   padding:10px 16px;box-shadow:0 8px 30px #0008}
+.clip{padding:10px 0 0;border-top:1px solid var(--line);margin-top:10px}
+.clip p{margin:4px 0 0}
 kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
   padding:1px 5px;font-size:12px}
 </style>
@@ -205,6 +207,17 @@ kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
             Levels every recording to broadcast loudness. Auto measures the room
             noise and only denoises if there is something to remove.
           </div>
+        </div>
+        <div class="card">
+          <div class="row">
+            <b style="flex:1">Clips for shorts</b>
+            <button id="clipBtn">Find clips</button>
+          </div>
+          <div class="small dim" id="clipInfo" style="margin-top:8px">
+            A local AI reads the transcript and suggests 30-60 second moments
+            that stand on their own. Takes about a minute.
+          </div>
+          <div id="clipList"></div>
         </div>
         <div class="card">
           <b>Export</b>
