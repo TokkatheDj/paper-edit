@@ -246,3 +246,60 @@ def test_audio_only_export_has_no_video(client, project):
     finally:
         client.post(f"/api/projects/{project}/words",
                     json={"indices": [w["idx"] for w in words], "deleted": False})
+
+
+def test_a_clip_exports_as_a_vertical_short(client, project, monkeypatch):
+    """Export short: only the clip, at 9:16, captioned, with the user's own
+    deletions inside it still applied -- and the project's edit untouched.
+
+    Captions are OFF for the project on purpose: a short must get them anyway.
+    """
+    import server
+    from paperedit import store
+
+    words = client.get(f"/api/projects/{project}/words").json()
+    inside = [w for w in words if 100.0 <= w["start"] <= 140.0]
+    assert len(inside) > 20, "expected speech in that range"
+    first, last = inside[0]["idx"], inside[-1]["idx"]
+    gone = [w["idx"] for w in inside[10:14]]               # a deletion inside the clip
+    client.post(f"/api/projects/{project}/words", json={"indices": gone, "deleted": True})
+    client.post(f"/api/projects/{project}/captions", json={"style": "off"})
+    styles = []
+    real_write = server.write_ass
+    monkeypatch.setattr(server, "write_ass",
+                        lambda *a, **k: (styles.append(k.get("style")), real_write(*a, **k))[1])
+    try:
+        before = [(w["idx"], w["deleted"]) for w in client.get(f"/api/projects/{project}/words").json()]
+        expected = server._plan(project, server._clip_words(project, first, last))
+        jid = client.post(f"/api/projects/{project}/export",
+                          json={"clip": {"first_idx": first, "last_idx": last}}).json()["job"]
+        job = _wait(client, jid)
+        assert job["status"] == "done", job["message"]
+        out = store.project_dir(project) / job["result"]
+        assert out.name.startswith(f"short-{first}-{last}-reels-")
+
+        size = _probe(out, "stream=width,height", stream="v:0")
+        assert tuple(int(x) for x in size.split(",")[:2]) == (1080, 1920), size
+        lines = _probe(out, "stream=codec_type,duration").splitlines()
+        kinds = {l.split(",")[0]: float(l.split(",")[1]) for l in lines}
+        assert abs(kinds["video"] - kinds["audio"]) < 0.05           # still in sync
+        assert kinds["video"] == pytest.approx(expected.duration, rel=0.01)
+        assert expected.duration < (inside[-1]["end"] - inside[0]["start"])   # the deletion counted
+        assert styles == ["highlight"]                               # captioned though off
+        assert not list(store.project_dir(project).glob("captions-*.ass"))   # tidied up
+        after = [(w["idx"], w["deleted"]) for w in client.get(f"/api/projects/{project}/words").json()]
+        assert after == before                                       # the project's edit untouched
+        out.unlink(missing_ok=True)
+    finally:
+        client.post(f"/api/projects/{project}/words", json={"indices": gone, "deleted": False})
+
+
+def test_bad_clips_are_refused(client, project):
+    words = client.get(f"/api/projects/{project}/words").json()
+    lo, hi = words[0]["idx"], words[-1]["idx"]
+    url = f"/api/projects/{project}/export"
+    assert client.post(url, json={"clip": {"first_idx": hi, "last_idx": lo}}).status_code == 400
+    assert client.post(url, json={"clip": {"first_idx": lo, "last_idx": hi + 50}}).status_code == 400
+    assert client.post(url, json={"clip": {"first_idx": "x"}}).status_code == 400
+    assert client.post(url, json={"clip": {"first_idx": lo, "last_idx": hi},
+                                  "preset": "audio"}).status_code == 400

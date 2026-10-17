@@ -26,7 +26,8 @@ around those three.
 | **Silence removal** | Trims long pauses out of the middle, leaving a beat at each end. The threshold is measured per file rather than fixed -- a fixed one removed 12% of a well-levelled recording and 78% of a quieter one. |
 | **Animated captions** | Word-level subtitles burned in at export, with the spoken word highlighted inside its phrase. Four styles, sized as a fraction of the frame so vertical and landscape both work. Timed against the EDITED timeline, so they stay in step with cuts. |
 | **Studio Sound** | Levels every export to broadcast loudness (-16 LUFS / -1.5 dBTP) and denoises only when the recording needs it. "Auto" measures speech-to-noise ratio and picks, because denoising a clean take measurably damages it -- see below. |
-| **Clip suggestions** (round 1) | The surviving transcript goes to a local LLM (Ollama, `gemma3:12b` by default) as timestamped lines; it names 30-60 s moments. Its times are treated as hints: code snaps each clip to sentence, comma, pause or word boundaries, fits the length on the edited timeline, and drops overlaps, deleted text and times past the end. On four real talks 17 of 24 model clips needed repair and all came out 30-60 s; about one end in five could only land on a plain word, because Whisper writes few full stops. Suggest-and-play only -- exporting them is the Shorts export row below. |
+| **Clip suggestions** (round 1) | The surviving transcript goes to a local LLM (Ollama, `gemma3:12b` by default) as timestamped lines; it names 30-60 s moments. Its times are treated as hints: code snaps each clip to sentence, comma, pause or word boundaries, fits the length on the edited timeline, and drops overlaps, deleted text and times past the end. On four real talks 17 of 24 model clips needed repair and all came out 30-60 s; about one end in five could only land on a plain word, because Whisper writes few full stops. Each one exports as a short (next row). |
+| **Shorts export** (round 2) | *Export short* on a suggested clip renders just that stretch of the edit at 1080x1920 with captions always burned in, built from the clip's surviving words so every other edit still applies. Vertical captions are capped by width and lifted clear of the apps' bottom overlay. Centre crop for now. |
 
 ### Planned
 
@@ -34,7 +35,7 @@ around those three.
 |---|---|---|
 | **Filler word removal** | See the honest caveat below — this cannot be done from the transcript alone. | 2 |
 | **Speaker labels** | pyannote is the strong option but needs a HuggingFace token and licence acceptance; a simpler turn-detector may be enough. Spike first. | 3 |
-| **Shorts export** | Auto-reframe to 9:16 / 1:1 with captions burned in. | 4 |
+| **Speaker-following reframe** | Shorts crop the centre today; track the face and pan when the speaker sits off-centre. | 4 |
 | **Multitrack timeline** | Non-destructive timeline over the same edit decision list, with volume keyframes and crossfades. | 5 |
 | **Stock and B-roll** | Pexels and Pixabay free APIs. | 5 |
 | **Green screen** | RobustVideoMatting (ONNX) runs comfortably on a mid-range GPU. | 6 |

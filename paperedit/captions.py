@@ -51,6 +51,11 @@ class Style:
     max_chars: int = 30
 
 
+# Vertical frames: the most text height may take, as a share of the WIDTH, and
+# how far up the caption line sits (Reels/TikTok/Shorts cover the bottom ~20%).
+VERTICAL_MAX_SIZE = 0.075
+VERTICAL_MARGIN_V = 0.28
+
 PRESETS: dict[str, Style] = {
     "clean":     Style("clean"),
     "highlight": Style("highlight", active="7DFF9B", size_ratio=0.058,
@@ -120,16 +125,25 @@ def build_ass(words: Sequence[dict], *, width: int, height: int,
         style = PRESETS.get(style, PRESETS["clean"])
     size = max(12, int(height * style.size_ratio))
     margin_v = int(height * style.margin_v_ratio)
+    side = int(width * 0.06)
+    if height > width:
+        # A vertical frame (Reels, Shorts, TikTok). Sized by height alone the
+        # text was 111 px on a 1080 px-wide picture and ran edge to edge; the
+        # bottom 10% is also where the apps lay their name, caption and buttons.
+        # So: cap the size by width, lift the line to ~72% down, wider sides.
+        size = min(size, max(12, int(width * VERTICAL_MAX_SIZE)))
+        margin_v = int(height * max(style.margin_v_ratio, VERTICAL_MARGIN_V))
+        side = int(width * 0.08)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
 PlayResY: {height}
-WrapStyle: 2
+WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{style.font},{size},{ass_colour(style.primary)},{ass_colour(style.active)},{ass_colour(style.outline)},&H80000000,{-1 if style.bold else 0},0,0,0,100,100,0,0,1,{style.outline_w},{style.shadow},{style.align},{int(width*0.06)},{int(width*0.06)},{margin_v},1
+Style: Cap,{style.font},{size},{ass_colour(style.primary)},{ass_colour(style.active)},{ass_colour(style.outline)},&H80000000,{-1 if style.bold else 0},0,0,0,100,100,0,0,1,{style.outline_w},{style.shadow},{style.align},{side},{side},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

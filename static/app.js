@@ -562,7 +562,12 @@ function renderClips(r) {
       clipStop = {start: c.start, end: c.end};
       seekSource(c.start);
     };
-    head.append(title, play);
+    const short = document.createElement('button');
+    short.className = 'small';
+    short.textContent = 'Export short';
+    short.title = '9:16 with captions, ready for Reels, Shorts and TikTok';
+    short.onclick = () => exportShort(c, short);
+    head.append(title, play, short);
     const when = document.createElement('div');
     when.className = 'small dim';
     when.textContent = `${fmt(c.start)}-${fmt(c.end)} · ${Math.round(c.duration)} s`;
@@ -574,6 +579,36 @@ function renderClips(r) {
     said.textContent = '"' + c.excerpt + '"';
     el.append(head, when, why, said);
     box.appendChild(el);
+  }
+}
+
+/* One clip as a vertical short: the same export as the whole edit, limited to
+   the clip's words, so deletions inside it still apply. Captions always on. */
+async function exportShort(c, btn) {
+  const pid = state.pid;
+  btn.disabled = true;
+  try {
+    const {job} = await jpost(`/projects/${pid}/export`,
+                              {preset: 'reels', clip: {first_idx: c.first_idx, last_idx: c.last_idx}});
+    const done = await pollJob(job, j => {
+      btn.textContent = j.status === 'running' ? Math.round(j.progress * 100) + '%' : j.status;
+    });
+    if (done.status === 'done') {
+      const a = document.createElement('a');
+      a.className = 'dl';
+      a.href = `/api/projects/${pid}/file/${done.result}`;
+      a.textContent = 'Save short "' + c.title + '"  (' + done.message + ')';
+      a.setAttribute('download', done.result);
+      if (pid === state.pid) $('#downloads').prepend(a);
+      toast('Short ready');
+    } else {
+      toast('Short failed: ' + done.message);
+    }
+  } catch (e) {
+    toast('Short failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Export short';
   }
 }
 

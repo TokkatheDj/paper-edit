@@ -90,7 +90,7 @@ python -m venv .venv
 | `static/` | The editor UI. Plain HTML and JS, no build step. |
 | `activity.py` | `Editor Activity.cmd` -- did it get used, and did anything fail quietly? Lists signed-in devices by label. Read-only. |
 | `spikes/` | The Phase 0 measurements. Each script prints its own numbers. |
-| `tests/` | 105 tests: EDL invariants, sign-in, session revocation and login throttling, the filler-word endpoint, platform export presets (YouTube, Reels, square, audio-only), dissolves at the joins, the fast per-cut seeked export, clip-suggestion repair and its endpoint (with the model faked), and a full upload-to-export run against real media. |
+| `tests/` | 111 tests: EDL invariants, sign-in, session revocation and login throttling, the filler-word endpoint, platform export presets (YouTube, Reels, square, audio-only), dissolves at the joins, the fast per-cut seeked export, clip-suggestion repair and its endpoint (with the model faked), shorts export (one clip, 9:16, captioned, the project untouched) and caption layout on vertical frames, and a full upload-to-export run against real media. |
 
 ## Next
 
@@ -112,11 +112,19 @@ ran under 30 s -- and all 24 came out 30-60 s. A run takes 11-25 s with `gemma3:
 12 s of that is loading the model the first time). The honest limit: Whisper writes few
 full stops, so about one clip end in five lands on a plain word boundary because no
 sentence, comma or pause fits the length; each clip says which it landed on. The
-suggestions are made against the transcript as it was when you asked. There is no shorts
-export yet -- that is round 2.
+suggestions are made against the transcript as it was when you asked.
 
-Still open, roughly in order: vertical shorts export for the suggested clips, real
-YouTube/Instagram API upload, a multitrack timeline, green screen, and local overdub. `ROADMAP.md` has the
+**Shorts export (round 2).** Each suggested clip has *Export short*: that stretch of the
+edit as a 1080x1920 video with captions burned in. It is the ordinary export with every
+word outside the clip treated as deleted -- so deletions inside the clip, silence removal
+and Studio Sound all apply, and the project's own edit is never touched. A short always
+gets captions (the project's style, or "highlight" if the full edit has them off). On a
+vertical frame the captions are sized by width and sit about 72% of the way down, clear of
+the name, caption and buttons Reels, TikTok and Shorts lay over the bottom. The picture is a
+centre crop; a 45 s clip from a 10-minute talk renders in about 22 s.
+
+Still open, roughly in order: following the speaker when they are off-centre (shorts
+crop the middle), real YouTube/Instagram API upload, a multitrack timeline, green screen, and local overdub. `ROADMAP.md` has the
 detail, including what is deliberately left out and why.
 
 **Sign-in.** One shared password for the household, hashed with scrypt, with server-side

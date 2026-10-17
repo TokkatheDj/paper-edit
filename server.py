@@ -54,10 +54,28 @@ def _project_or_404(pid: str) -> dict:
     return p
 
 
-def _words(pid: str) -> list[Word]:
+def _words(pid: str, raw: list[dict] | None = None) -> list[Word]:
     return [Word(w["text"], w["start"], w["end"], speaker=w["speaker"],
                  deleted=bool(w["deleted"]), probability=w["probability"])
-            for w in store.get_words(pid)]
+            for w in (store.get_words(pid) if raw is None else raw)]
+
+
+def _clip_words(pid: str, first_idx: int, last_idx: int) -> list[dict]:
+    """The project's words with everything outside one clip deleted.
+
+    A short is an export of a clip, so it is built the same way as every other
+    export -- from the words that survive -- rather than by trimming a render.
+    Deletions the user made inside the clip still apply, and the captions,
+    silence removal and Studio Sound all come along unchanged. Nothing is
+    written back: the project's own edit is untouched.
+    """
+    out = []
+    for w in store.get_words(pid):
+        w = dict(w)
+        if not first_idx <= int(w["idx"]) <= last_idx:
+            w["deleted"] = 1
+        out.append(w)
+    return out
 
 
 def _silences(pid: str, src: str) -> list[tuple[float, float]]:
@@ -71,9 +89,10 @@ def _silences(pid: str, src: str) -> list[tuple[float, float]]:
     return found
 
 
-def _plan(pid: str):
+def _plan(pid: str, raw: list[dict] | None = None):
     """Cuts derived from the surviving words, snapped to silence, with dead air
-    removed if the project asks for it."""
+    removed if the project asks for it. `raw` replaces the stored words (a
+    clip's, from _clip_words)."""
     p = _project_or_404(pid)
     src = p["source"]
     sil: list[tuple[float, float]] = []
@@ -82,7 +101,7 @@ def _plan(pid: str):
     removed = []
     if p["silence_on"]:
         removed = silence_gaps(sil, keep=p["silence_keep"], min_remove=p["silence_min"])
-    return derive_cuts(_words(pid), snap_points=snap_points(sil), snap_tolerance=0.15,
+    return derive_cuts(_words(pid, raw), snap_points=snap_points(sil), snap_tolerance=0.15,
                        removed_ranges=removed, duration=p["duration"] or None,
                        fps=p["fps"] or None)
 
@@ -117,19 +136,23 @@ def _output_size(p: dict, preset: str) -> tuple[int, int]:
     return w, h
 
 
-def _caption_filter(pid: str, p: dict, plan, width: int, height: int) -> str:
+def _caption_filter(pid: str, p: dict, plan, width: int, height: int, *,
+                    raw: list[dict] | None = None, style: str | None = None,
+                    name: str = "captions.ass") -> str:
     """Write the .ass for this edit and return the filter that burns it in.
 
     Regenerated per export, deliberately: the caption timings depend on the cut
     list, so a stale file would drift out of sync the moment anything is edited.
+    `raw`/`style`/`name` let a short use its clip's words, its own style and its
+    own file, so two exports running at once never share a caption file.
     """
-    style = p["caption_style"] or "off"
+    style = style or p["caption_style"] or "off"
     if style == "off" or style not in CAPTION_PRESETS or not p["has_video"]:
         return ""
-    words = words_on_output_timeline(store.get_words(pid), plan)
+    words = words_on_output_timeline(store.get_words(pid) if raw is None else raw, plan)
     if not words:
         return ""
-    path = store.project_dir(pid) / "captions.ass"
+    path = store.project_dir(pid) / name
     write_ass(words, path, width=width, height=height, style=style)
     # A BARE filename, with ffmpeg run from the project directory. Escaping the
     # drive colon inside a filter argument does not survive ffmpeg's option
@@ -176,20 +199,31 @@ def _ingest(pid: str, jid: str) -> None:
                          message=(type(e).__name__ + ": " + str(e))[:500])
 
 
-def _export(pid: str, jid: str, preset: str) -> None:
+def _export(pid: str, jid: str, preset: str, clip: tuple[int, int] | None = None) -> None:
     try:
         store.update_job(jid, status="running", progress=0.05, message="planning cuts")
         p = store.get_project(pid)
-        plan = _plan(pid)
+        raw = _clip_words(pid, *clip) if clip else None
+        plan = _plan(pid, raw)
         if not plan.cuts:
-            raise ValueError("everything is deleted -- nothing left to export")
+            raise ValueError("everything is deleted -- nothing left to export"
+                             + (" in that clip" if clip else ""))
         ext = "m4a" if preset == "audio" else "mp4"
-        out = store.project_dir(pid) / f"export-{preset}-{int(time.time())}.{ext}"
+        stamp = int(time.time())
+        out = store.project_dir(pid) / (f"short-{clip[0]}-{clip[1]}-{preset}-{stamp}.{ext}" if clip
+                                        else f"export-{preset}-{stamp}.{ext}")
         store.update_job(jid, progress=0.15,
                          message=f"rendering {len(plan.cuts)} cuts, {plan.duration/60:.1f} min")
         spec = PRESETS[preset]
         caption = ""
-        if spec["video"]:
+        if spec["video"] and clip:
+            # A short is watched with the sound off more often than not, so it
+            # always gets captions: the project's style, or "highlight" if the
+            # full-length edit has them switched off.
+            style = p["caption_style"] if p["caption_style"] in CAPTION_PRESETS else "highlight"
+            caption = _caption_filter(pid, p, plan, *_output_size(p, preset), raw=raw,
+                                      style=style, name=f"captions-{jid}.ass")
+        elif spec["video"]:
             caption = _caption_filter(pid, p, plan, *_output_size(p, preset))
         # Reframe first, then burn the captions on the reframed picture --
         # the other order would crop the text off the sides of a 9:16 export.
@@ -205,10 +239,14 @@ def _export(pid: str, jid: str, preset: str) -> None:
         # long. Measured in spikes/drift.py -- audio and video stay in sync.
         actual = media_info(out)["duration"]
         store.update_job(jid, status="done", progress=1.0, result=out.name,
-                         message=f"{actual/60:.1f} min from {len(plan.cuts)} cuts")
+                         message=(f"{actual:.0f} s short" if clip
+                                  else f"{actual/60:.1f} min from {len(plan.cuts)} cuts"))
     except Exception as e:
         store.update_job(jid, status="failed",
                          message=(type(e).__name__ + ": " + str(e))[:500])
+    finally:
+        if clip:
+            (store.project_dir(pid) / f"captions-{jid}.ass").unlink(missing_ok=True)
 
 
 def _find_clips(pid: str, jid: str, n: int) -> None:
@@ -497,12 +535,28 @@ def api_plan(pid: str):
 
 @app.post("/api/projects/{pid}/export")
 def api_export(pid: str, body: dict = Body(default={})):
-    _project_or_404(pid)
-    preset = body.get("preset", "source")
+    """Export the edit -- or, with "clip": {"first_idx", "last_idx"}, just that
+    stretch of it as a short (9:16 unless a preset is named)."""
+    p = _project_or_404(pid)
+    clip = None
+    if body.get("clip") is not None:
+        c = body["clip"]
+        try:
+            clip = (int(c["first_idx"]), int(c["last_idx"]))
+        except (TypeError, KeyError, ValueError):
+            raise HTTPException(400, "clip needs first_idx and last_idx")
+        idx = [int(w["idx"]) for w in store.get_words(pid)]
+        if not idx or clip[0] > clip[1] or clip[0] < min(idx) or clip[1] > max(idx):
+            raise HTTPException(400, "that clip is not in this transcript")
+        if not p["has_video"]:
+            raise HTTPException(400, "shorts need a video; this project is audio only")
+    preset = body.get("preset", "reels" if clip else "source")
     if preset not in PRESETS:
         raise HTTPException(400, "unknown preset " + str(preset))
+    if clip and not PRESETS[preset]["video"]:
+        raise HTTPException(400, "a short has to be a video preset")
     jid = store.create_job(pid, "export")
-    store.run_in_background(_export, pid, jid, preset)
+    store.run_in_background(_export, pid, jid, preset, clip)
     return {"job": jid}
 
 
