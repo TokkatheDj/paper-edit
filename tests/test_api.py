@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 MEDIA = ROOT / "spikes" / "media" / "test-300s.mp4"
+# A stretch with real talk in it. The AMI meeting is SILENT until ~40 s: the old
+# 10-25 s window only had words because large-v3 invented 2 there; the verbatim
+# model (with VAD) correctly hears nothing (23 Oct 2026). 60-90 s is avoided too:
+# test_export_matches_the_plan deletes it.
+SPEECH = (45.0, 60.0)
 pytestmark = pytest.mark.skipif(
     not MEDIA.exists(), reason="run spikes/cut_quality.py first to build the test media")
 
@@ -202,7 +207,7 @@ def test_platform_presets_render_at_the_right_size(client, project):
     from paperedit import store
 
     words = client.get(f"/api/projects/{project}/words").json()
-    keep = {w["idx"] for w in words if 10.0 <= w["start"] <= 25.0}
+    keep = {w["idx"] for w in words if SPEECH[0] <= w["start"] <= SPEECH[1]}
     assert keep, "expected words in that range"
     client.post(f"/api/projects/{project}/words",
                 json={"indices": [w["idx"] for w in words if w["idx"] not in keep],
@@ -230,7 +235,7 @@ def test_audio_only_export_has_no_video(client, project):
     from paperedit import store
 
     words = client.get(f"/api/projects/{project}/words").json()
-    keep = {w["idx"] for w in words if 10.0 <= w["start"] <= 25.0}
+    keep = {w["idx"] for w in words if SPEECH[0] <= w["start"] <= SPEECH[1]}
     client.post(f"/api/projects/{project}/words",
                 json={"indices": [w["idx"] for w in words if w["idx"] not in keep],
                       "deleted": True})

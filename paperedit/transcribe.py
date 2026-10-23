@@ -10,6 +10,7 @@ claiming it rather than crashing halfway through someone's podcast.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 from typing import Callable, Iterator
@@ -19,6 +20,32 @@ from cuda_setup import enable_cuda
 GPU_MODEL = "large-v3"
 CPU_MODEL = "small"
 GPU_VRAM_NEEDED_MB = 4000
+
+# VERBATIM (22 Oct 2026, FINDINGS.md section 5): CrisperWhisper writes down the "um"s and
+# "uh"s Whisper tidies away (0 of 76 -> 53 of 76 on AMI; 2 -> 11 on a real 10-minute
+# talk), plus the repeats real speech has ("I I think"). Used when it has been downloaded and the
+# GPU is free - it is a large-v3-sized model, too slow on CPU. Settings are the repeatable
+# ones: beam 5, silence skipped (VAD), NO temperature fallback - the fallback samples, so
+# the same video gave different cuts on different runs - and a no-repeat guard, because
+# without the fallback it loops (see below).
+VERBATIM_MODEL = "nyralabs/faster_CrisperWhisper"
+
+
+def verbatim_available() -> bool:
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        return isinstance(try_to_load_from_cache(VERBATIM_MODEL, "model.bin"), str)
+    except Exception:
+        return False
+
+
+def clean_word(text: str) -> str:
+    """CrisperWhisper marks fillers as [UM] / [UH] - sometimes with the previous word's
+    comma glued on (",[UM]", seen on AMI 22 Oct); the editor shows them as um / uh."""
+    m = re.fullmatch(r"\W*\[([A-Za-z]+)\]\W*", text.strip())
+    if m:
+        return " " + m.group(1).lower()
+    return text
 
 
 def free_vram_mb() -> int:
@@ -47,6 +74,9 @@ def transcribe(path: str | Path, *, language: str = "en",
                progress: Callable[[float, str], None] | None = None) -> list[dict]:
     """Return word dicts: text, start, end, probability."""
     device, compute, model_name = pick_device()
+    verbatim = device == "cuda" and verbatim_available()
+    if verbatim:
+        model_name = VERBATIM_MODEL
     if progress:
         progress(0.0, f"loading {model_name} on {device}")
 
@@ -54,15 +84,22 @@ def transcribe(path: str | Path, *, language: str = "en",
     model = WhisperModel(model_name, device=device, compute_type=compute,
                          cpu_threads=32)
 
+    # no_repeat_ngram_size=4: without it, no-fallback decoding LOOPS - "So, we're. So,
+    # we're..." in 10 ms "words"; 324 of 545 words of the test video were loop garbage
+    # (spikes/loop_check.py, 23 Oct). Forbidding any 4-word run from repeating took that
+    # to 0 AND lifted AMI filler recall from 38/76 to 53/76, still repeatable. 3 cost
+    # fillers (27/76); a repetition penalty left 71 loops.
+    extra = ({"vad_filter": True, "temperature": 0.0, "no_repeat_ngram_size": 4}
+             if verbatim else {})
     segments, info = model.transcribe(
         str(path), language=language, beam_size=5, word_timestamps=True,
-        condition_on_previous_text=False,
+        condition_on_previous_text=False, **extra,
     )
     total = info.duration or 1.0
     words: list[dict] = []
     for seg in segments:
         for w in (seg.words or []):
-            text = w.word
+            text = clean_word(w.word)
             if not text.strip():
                 continue
             words.append({"text": text, "start": round(w.start, 3),

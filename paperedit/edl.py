@@ -183,7 +183,8 @@ FILLERS = {"um", "uh", "erm", "hmm", "mm", "uhh", "umm", "er", "eh",
 
 
 def _norm(text: str) -> str:
-    return text.strip().strip(".,!?;:-\u2014\"'").lower()
+    # "[UM]" is how the verbatim model (transcribe.VERBATIM_MODEL) writes a filler
+    return text.strip().strip(".,!?;:-\u2014\"'[]").lower()
 
 
 def is_filler(text: str, vocabulary: set[str] = FILLERS) -> bool:

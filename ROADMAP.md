@@ -33,7 +33,7 @@ around those three.
 
 | Feature | Approach | Phase |
 |---|---|---|
-| **Filler word removal** | See the honest caveat below — this cannot be done from the transcript alone. | 2 |
+| **Filler word removal** | A verbatim model (CrisperWhisper) writes the ums down: 53 of 76 found on a hard meeting recording, where Whisper found 0. See the caveat below. | 2 |
 | **Speaker labels** | pyannote is the strong option but needs a HuggingFace token and licence acceptance; a simpler turn-detector may be enough. Spike first. | 3 |
 | **Speaker-following reframe** | Shorts crop the centre today; track the face and pan when the speaker sits off-centre. | 4 |
 | **Multitrack timeline** | Non-destructive timeline over the same edit decision list, with volume keyframes and crossfades. | 5 |
@@ -88,17 +88,27 @@ which makes denoising look actively harmful. Always compare at matched loudness.
 
 ## Honest caveat: filler words
 
-"Remove all the ums with one click" is the feature people most want, and it **cannot be
-built from the transcript alone**. Measured against human-annotated ground truth, Whisper
-transcribes only **7-17%** of the fillers a person actually hears — it is trained to produce
-clean readable text and tidies disfluencies away. Neither a larger model nor a
-filler-primed prompt fixes it. Of the ones it drops, roughly 43% leave a hole in the word
-timeline (recoverable acoustically) and 57% are absorbed into a neighbouring word's span
-(invisible to any transcript-based method).
+"Remove all the ums with one click" is the feature people most want, and **regular Whisper
+cannot do it**: it is trained to produce clean readable text and tidies disfluencies away.
+Measured against human-annotated ground truth it transcribes only **7-17%** of the fillers
+a person hears, and neither a larger model nor a filler-primed prompt fixes it.
 
-So filler removal has to be built as: silence and pause removal first, acoustic detection
-over the gaps second, and the transcript only as a supplement. `FINDINGS.md` has the
-numbers and the method.
+**What does work (Oct 2026):** a *verbatim* model. When
+[CrisperWhisper](https://huggingface.co/nyralabs/faster_CrisperWhisper) is downloaded and
+the GPU is free, Paper Edit transcribes with it, so the "um"s are words in the transcript
+and the filler button can remove them. Scored by time against hand-timed words
+(`spikes/filler_score.py`): **53 of 76 fillers found, 78% of its marks real**, on a
+four-person meeting recording - the hard case - where Whisper found none. It needs three
+settings to be safe for an editor, all measured in `FINDINGS.md` section 5:
+
+- **no temperature fallback** - the fallback samples, so the same video gave different
+  cuts on different runs;
+- **VAD** (silence skipped) and **no_repeat_ngram_size=4** - without them it loops,
+  writing a phrase dozens of times in 10 ms "words" (324 of 545 words on the test video).
+
+Still worth knowing: the model is CC BY-NC 4.0 (fine for your own videos, not for selling
+a product built on it), it was partly trained on the AMI corpus used for scoring, and it
+should always be reviewed before cutting - Paper Edit marks, the person decides.
 
 ## Constraints worth knowing
 

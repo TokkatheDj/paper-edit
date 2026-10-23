@@ -22,8 +22,10 @@ SEED = [
     ("was",        2.1, 2.4),
     ("hmm",        2.5, 2.9),      # filler
     ("outside.",   3.0, 3.6),
+    ("[UH]",       3.7, 3.9),      # filler as the verbatim model writes it
+    ("[Laughter]", 4.0, 4.6),      # bracketed, but NOT a filler
 ]
-FILLER_IDX = [1, 4, 6]
+FILLER_IDX = [1, 4, 6, 8]
 
 
 @pytest.fixture()
@@ -50,7 +52,7 @@ def project(client):
 def test_it_removes_exactly_the_standalone_fillers(client, project):
     r = client.post(f"/api/projects/{project}/fillers", json={"deleted": True}).json()
     assert r["indices"] == FILLER_IDX
-    assert r["marked"] == 3
+    assert r["marked"] == 4
 
     words = client.get(f"/api/projects/{project}/words").json()
     assert [w["idx"] for w in words if w["deleted"]] == FILLER_IDX
@@ -84,3 +86,13 @@ def test_a_transcript_with_no_fillers_is_a_no_op(client):
         assert r["duration"] == pytest.approx(1.6, abs=0.05)
     finally:
         client.delete(f"/api/projects/{pid}")
+
+
+def test_verbatim_model_fillers_display_as_plain_words():
+    from paperedit.transcribe import clean_word
+    assert clean_word(" [UM]") == " um"
+    assert clean_word("[UH]") == " uh"
+    assert clean_word(",[UM]") == " um"                    # comma glued on, as AMI showed
+    assert clean_word("[UM].") == " um"
+    assert clean_word(" umbrella") == " umbrella"          # untouched
+    assert clean_word(" [inaudible") == " [inaudible"      # half a bracket: untouched

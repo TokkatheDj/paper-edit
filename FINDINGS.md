@@ -118,7 +118,63 @@ because the threshold is the only thing watching for real desync.
   `base` on CPU for both timestamps and filler recall, at acceptable speed.
 - Always snap cuts to silence. Always crossfade audio at joins.
 - Rebuild Phase 2's filler feature around silence removal first, acoustic detection second,
-  and set expectations with her accordingly.
+  and set expectations accordingly. *(Superseded Oct 2026: a verbatim model does better
+  than acoustic gap detection - see section 5.)*
 - Keep the EDL derivation under test — the frame-quantisation ordering bug caught by
   `tests/test_edl.py::test_frame_quantisation_lands_on_the_grid` was invisible to
   inspection.
+
+## 5. A verbatim model finds fillers Whisper hides (22 Oct 2026)
+
+`spikes/filler_score.py` scores filler detection by TIME against AMI's hand-timed words
+(a detection is a hit if it overlaps a human-marked filler or starts within 0.25 s; every
+other detection is a false alarm - a real word cut). mm-hmm / uh-huh are answers, not
+fillers, and are excluded. Windows: 0-300 s (25 fillers) and a held-out 300-600 s (51).
+
+| detector (faster-whisper, GPU) | 0-300 s recall / precision | 300-600 s | repeatable? |
+|---|---|---|---|
+| Whisper large-v3 | 0% / - | 0% / - | yes |
+| CrisperWhisper, default retries | 60-68% / 55-67% | 41-57% / 65-73% | **no** |
+| CrisperWhisper, beam 5, VAD, retries | 72-76% / 86% | 41-51% / 65-81% | **no** |
+| CrisperWhisper, no retries, no VAD | 56-64% / 11-39% | 20-24% / 16-62% | yes (loops: "um um um") |
+| **CrisperWhisper, beam 5, VAD, no retries** | **64% / 67%** | **43% / 96%** | **yes** |
+
+Model: `nyralabs/faster_CrisperWhisper` (CTranslate2 conversion, 3.09 GB, CC BY-NC 4.0 -
+personal use). It writes fillers as [UH] / [UM].
+
+- faster-whisper's temperature fallback SAMPLES; `ctranslate2.set_random_seed` did not make
+  runs repeat on the GPU. An editor must give the same cuts twice, so no retries - and VAD
+  (silence skipped) is what stops the no-retry loops.
+- Chosen: beam 5 + VAD + no retries. Over both windows: 38 of 76 fillers found (50%),
+  38 of 47 detections real (81%).
+- **Caveats:** CrisperWhisper was trained partly on AMI, so this benchmark may flatter it.
+  And this is the HARD case - a four-person meeting on one mix, with overlapping talk
+  (most 300-600 s misses are during overlaps). One person on a good mic - what Paper Edit is for - is
+  the real test, and it must be a recording the model never trained on.
+- Timing: the faster version's word timings are looser than the original's (the model
+  card says so). Allowing 1.6 s of slack only lifts recall 53% -> 57%, so timing is not
+  the main loss - but cuts must still snap to silence (section 4).
+
+### 5b. ...and without a guard it LOOPS - fixed with no_repeat_ngram_size=4 (23 Oct 2026)
+
+Found by test_api failing after the switch: around 100.5 s of the test video the verbatim
+model wrote "So, we're. So, we're. ..." dozens of times inside half a second, each "word"
+10 ms long. `spikes/loop_check.py` (a loop = a word under 30 ms repeating one of the
+previous four):
+
+| setting (beam 5, VAD, no fallback) | test video loops | AMI 0-300 found / real | AMI 300-600 | repeatable |
+|---|---|---|---|---|
+| no guard | **324 of 545 words** | 16/25, 67% | 22/51, 96% | yes |
+| **no_repeat_ngram_size=4** | **0** | **20/25, 83%** | **33/51, 75%** | **yes** |
+| no_repeat_ngram_size=3 | 0 | 10/25, 67% | 17/51, 74% | yes |
+| repetition_penalty=1.1 | 71 | 17/25, 81% | 16/51, 64% | yes |
+
+The guard removes the loops AND finds more fillers - 53 of 76 (70%), up from 38 - because
+the loops were crowding out real words. A real 10-minute single-speaker talk: 1563 words -> 1424 (about 140
+of the "extra" words were loop garbage, not real repeats) and 11 fillers, 5 of them in the
+last second of the recording (to be judged by ear: spikes/listen_sheet.py).
+
+The three test_api export failures were this, not an old problem: the AMI test video is
+silent until ~40 s (large-v3 had invented 2 words at 10-25 s that the tests relied on;
+they now use 45-60 s), and the short-clip test's "deletion" was four loop words 10 ms long,
+so it made no cut. 112/112 tests pass.
